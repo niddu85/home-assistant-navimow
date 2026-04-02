@@ -15,10 +15,10 @@ class NavimowApiClient:
         self._session = session
 
     def _get_headers(self):
-        """Header richiesti dalla documentazione."""
+        """Header richiesti."""
         return {
             "Authorization": f"Bearer {self._token}",
-            "requestId": str(uuid.uuid4()),
+            "requestId": str(uuid.uuid4())[:32], # Limita la lunghezza per sicurezza
             "Content-Type": "application/json"
         }
 
@@ -36,7 +36,7 @@ class NavimowApiClient:
             return []
 
     async def async_get_all_vehicles_status(self, device_ids: list) -> dict:
-        """Recupera lo stato bulk. Ritorna None su errore critico."""
+        """Recupera lo stato bulk."""
         if not device_ids:
             return {}
 
@@ -45,19 +45,25 @@ class NavimowApiClient:
         
         try:
             async with self._session.post(url, headers=self._get_headers(), json=payload) as response:
-                # Gestione errore 401 standard
+                # Se riceve 401, il token è sicuramente scaduto
                 if response.status == 401:
                     return {"error": "TOKEN_EXPIRED"}
                 
                 res = await response.json()
-                if res.get("code") == 1:
+                code = res.get("code")
+                desc = res.get("desc", "")
+
+                # SUCCESSO
+                if code == 1:
                     devices = res.get("data", {}).get("payload", {}).get("devices", [])
                     return {d["id"]: d for d in devices}
                 
-                if res.get("desc") == "TOKEN_EXPIRED":
+                # TRAPPOLA PER TOKEN SCADUTO (4005 o stringa)
+                if code == 4005 or desc == "TOKEN_EXPIRED" or desc == "CODE_OAUTH_INFO_ILLEGAL":
+                    _LOGGER.info("Rilevato token scaduto (codice %s), richiedo refresh", code)
                     return {"error": "TOKEN_EXPIRED"}
                 
-                _LOGGER.error("Errore API getVehicleStatus: %s", res)
+                _LOGGER.error("Errore API Navimow sconosciuto: %s", res)
                 return None
         except Exception as e:
             _LOGGER.error("Eccezione durante getVehicleStatus: %s", e)
@@ -73,8 +79,12 @@ class NavimowApiClient:
             "client_secret": "57056e15-722e-42be-bbaa-b0cbfb208a52"
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        async with self._session.post(url, data=payload, headers=headers) as response:
-            return await response.json()
+        try:
+            async with self._session.post(url, data=payload, headers=headers) as response:
+                return await response.json()
+        except Exception as e:
+            _LOGGER.error("Errore durante il refresh del token: %s", e)
+            return {}
 
     async def async_send_command(self, device_id: str, command: str, params: dict = None) -> bool:
         """Invia un comando."""
