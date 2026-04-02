@@ -26,6 +26,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 3. Primo refresh (indispensabile per creare le entità con dati)
     await coordinator.async_config_entry_first_refresh()
 
+    # Recupera credenziali MQTT e avvia il loop
+    mqtt_info = await api_client.async_get_mqtt_info()
+    if mqtt_info:
+        # Aggiungi l'await qui!
+        await coordinator.async_setup_mqtt(mqtt_info)
+
     # 4. Salvataggio dati per le piattaforme
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
