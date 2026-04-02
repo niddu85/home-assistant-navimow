@@ -3,6 +3,24 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN
 
+RAW_STATE_TO_CANONICAL = {
+    "isDocked": "docked",
+    "isIdel": "idle",
+    "isIdle": "idle",
+    "isMapping": "mowing",
+    "isRunning": "mowing",
+    "isPaused": "paused",
+    "isDocking": "returning",
+    "Error": "error",
+    "error": "error",
+    "isLifted": "error",
+    "inSoftwareUpdate": "paused",
+    "Self-Checking": "idle",
+    "Self-checking": "idle",
+    "Offline": "unknown",
+    "offline": "unknown",
+}
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     devices = hass.data[DOMAIN][entry.entry_id]["devices"]
@@ -30,17 +48,26 @@ class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
 
     @property
     def activity(self) -> LawnMowerActivity:
+        """Legge la stringa esatta da vehicleState e la mappa."""
         device_status = self.coordinator.data.get(self._id, {})
-        state = device_status.get("vehicleState", "idle")
-        mapping = {
-            "mowing": LawnMowerActivity.MOWING,
-            "docked": LawnMowerActivity.DOCKED,
-            "charging": LawnMowerActivity.DOCKED,
-            "returning": LawnMowerActivity.RETURNING,
-            "paused": LawnMowerActivity.PAUSED,
-            "error": LawnMowerActivity.ERROR,
-        }
-        return mapping.get(state, LawnMowerActivity.ERROR)
+        
+        # Prende la stringa (es. "isPaused")
+        raw_state = device_status.get("vehicleState")
+        
+        # Traduce la stringa usando il dizionario
+        canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
+
+        if canonical == "mowing":
+            return LawnMowerActivity.MOWING
+        if canonical == "returning":
+            return LawnMowerActivity.RETURNING
+        if canonical == "paused":
+            return LawnMowerActivity.PAUSED
+        if canonical == "error":
+            return LawnMowerActivity.ERROR
+        
+        # Default per idle, docked o stati sconosciuti
+        return LawnMowerActivity.DOCKED
 
     async def async_start_mowing(self):
         await self.coordinator.api.async_send_command(self._id, "action.devices.commands.StartStop", {"on": True})
