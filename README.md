@@ -10,8 +10,8 @@ Unofficial Home Assistant custom component for Segway Navimow robotic lawn mower
 - **Lawn Mower Entity:** Native Home Assistant `lawn_mower` entity support.
 - **Control Commands:** Start mowing, pause, and return to dock.
 - **Status Monitoring:** Real-time updates on mower state (mowing, docked, paused, error).
-- *(Planned)* **Battery Level:** Track battery percentage as a sensor.
-- *(Planned)* **Blade Status:** Monitor blade condition.
+- _(Planned)_ **Battery Level:** Track battery percentage as a sensor.
+- _(Planned)_ **Blade Status:** Monitor blade condition.
 
 ## 📋 Requirements
 
@@ -22,17 +22,15 @@ Unofficial Home Assistant custom component for Segway Navimow robotic lawn mower
 ## ⚙️ Installation
 
 ### HACS (Recommended - Coming Soon)
-*Note: Until the repository is added to the default HACS store, you must add it as a custom repository.*
+
+_Note: Until the repository is added to the default HACS store, you must add it as a custom repository._
 
 1. Open HACS in your Home Assistant instance.
 2. Go to **Integrations** -> click the three dots in the top right -> **Custom repositories**.
-3. Repository: `https://github.com/tuo_username/home-assistant-navimow`
+3. Repository: `https://github.com/niddu85/home-assistant-navimow`
 4. Category: **Integration**
 5. Click **Add**.
 6. Search for "Navimow" in HACS, install it, and restart Home Assistant.
-
-### Manual Installation
-TODO
 
 ## 🛠️ Configuration
 
@@ -49,7 +47,8 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 Contributions are welcome! If you find a bug or have a feature request, please open an issue. If you want to contribute code, feel free to open a pull request.
 
 ### Development Setup
-*(Add notes here on how to set up the dev environment, run tests, etc.)*
+
+_(Add notes here on how to set up the dev environment, run tests, etc.)_
 
 ## 📜 Disclaimer
 

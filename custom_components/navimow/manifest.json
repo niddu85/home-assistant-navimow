@@ -1,0 +1,11 @@
+{
+  "domain": "navimow",
+  "name": "Navimow",
+  "codeowners": ["@niddu85"],
+  "config_flow": true,
+  "documentation": "https://www.home-assistant.io/integrations/navimow",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "requirements": ["aiohttp"],
+  "version": "0.1.0"
+}
