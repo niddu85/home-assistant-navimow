@@ -2,6 +2,8 @@
 from datetime import timedelta
 import logging
 import json
+import uuid
+from urllib.parse import urlparse
 import paho.mqtt.client as mqtt
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -89,18 +91,32 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator):
         _LOGGER.warning("Info MQTT ricevute dal server: %s", mqtt_info)
 
         def _connect_mqtt():
+            # Estrai hostname da URL completo (es: wss://mqtt-fra.navimow.com)
+            mqtt_host = mqtt_info.get("mqttHost", "")
+            parsed = urlparse(mqtt_host)
+            hostname = parsed.hostname or mqtt_host
+            
+            # Genera client ID come fa l'SDK ufficiale
+            username = mqtt_info.get("userName", "unknown")
+            rand_suffix = uuid.uuid4().hex[:10]
+            client_id = f"web_{username}_{rand_suffix}"
+            
             # Transport WebSocket per porta 443
-            client = mqtt.Client(client_id=mqtt_info.get("clientId"), transport="websockets")
+            client = mqtt.Client(client_id=client_id, transport="websockets")
             
-            # Credenziali
-            client.username_pw_set(mqtt_info.get("userName"), mqtt_info.get("password"))
+            # Credenziali usuali
+            password = mqtt_info.get("pwdInfo")
+            client.username_pw_set(username, password)
             
-            # 1. WebSocket path + HEADER DI AUTENTICAZIONE (ESSENZIALE!)
-            ws_path = mqtt_info.get("wsPath", mqtt_info.get("path", "/ws"))
-            auth_headers = mqtt_info.get("headers", {})  # <-- IMPORTANTE
+            # WebSocket path
+            ws_path = mqtt_info.get("mqttUrl", "/mqtt")
+            
+            # ESSENZIALE: Header di autorizzazione per il handshake WebSocket
+            token = self.entry.data.get("access_token")
+            auth_headers = {"Authorization": f"Bearer {token}"}
             client.ws_set_options(path=ws_path, headers=auth_headers)
             
-            # 2. TLS per porta 443
+            # TLS per porta 443
             client.tls_set()
             client.tls_insecure_set(False)  # Verifica certificati
             
@@ -115,22 +131,24 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator):
             def on_connect(client, userdata, flags, rc):
                 if rc == 0:
                     _LOGGER.info("MQTT connesso con successo")
+                    # Sottoscrivi ai topic
+                    for topic in mqtt_info.get("subTopics", []):
+                        client.subscribe(topic)
+                        _LOGGER.debug(f"Sottoscritto a topic: {topic}")
                 else:
-                    _LOGGER.error("Errore connessione MQTT: %s", rc)
+                    _LOGGER.error("Errore connessione MQTT (rc=%d): %s", rc)
 
             def on_disconnect(client, userdata, rc):
-                _LOGGER.warning("MQTT disconnesso: %s", rc)
+                _LOGGER.warning("MQTT disconnesso: rc=%d", rc)
 
             client.on_message = on_message
             client.on_connect = on_connect
             client.on_disconnect = on_disconnect
             
-            host = mqtt_info.get("host", "navimow-fra.ninebot.com")
-            port = int(mqtt_info.get("port", 443))
+            port = 443
             
-            _LOGGER.info(f"Connessione MQTT a {host}:{port} con path {ws_path}")
-            client.connect(host, port, 60)
-            client.subscribe(mqtt_info.get("topic"))
+            _LOGGER.info(f"Connessione MQTT a {hostname}:{port} con path {ws_path} e headers: {auth_headers}")
+            client.connect(hostname, port, 60)
             client.loop_start()
             return client
 
