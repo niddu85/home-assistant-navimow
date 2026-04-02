@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Navimow",
+        "description": "Enter a name to identify this Navimow account.",
+        "data": {
+          "account_name": "Account Name"
+        }
+      },
+      "auth": {
+        "title": "Link Navimow Account",
+        "description": "Please click [this link]({auth_url}) to log into your Segway Navimow account.\n\nOnce completed, this window will close or update automatically."
+      }
+    },
+    "error": {
+      "invalid_url": "The provided URL is invalid.",
+      "invalid_code": "Unable to extract the authorization code.",
+      "auth_failed": "Authentication failed: unable to retrieve the token.",
+      "cannot_connect": "Failed to connect to Navimow servers."
+    },
+    "abort": {
+      "already_configured": "An account with this name is already configured."
+    }
+  }
+}
