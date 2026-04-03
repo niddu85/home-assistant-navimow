@@ -4,6 +4,7 @@
   "codeowners": ["@niddu85"],
   "config_flow": true,
   "documentation": "https://github.com/niddu85/home-assistant-navimow",
+  "issue_tracker": "https://github.com/niddu85/home-assistant-navimow/issues",
   "integration_type": "device",
   "iot_class": "cloud_polling",
   "icon": "icon.png",
