@@ -1,5 +1,7 @@
 # Segway Navimow Integration for Home Assistant
 
+<img src="custom_components/navimow/brand/icon.png" alt="Navimow Integration Icon" width="128" height="128" />
+
 Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mowers. This integration connects your mower using the official Segway OpenAPI, allowing you to monitor real-time status and control operations directly from Home Assistant.
 
 > [!WARNING]
