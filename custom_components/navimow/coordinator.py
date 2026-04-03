@@ -109,7 +109,7 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator):
                 try:
                     payload = json.loads(msg.payload.decode())
                     _LOGGER.debug("MQTT payload (JSON): %s", payload)
-                    self.hass.add_job(self._handle_mqtt_payload, payload)
+                    self.hass.add_job(self._handle_mqtt_payload, msg.topic, payload)
                 except json.JSONDecodeError as e:
                     _LOGGER.warning("Invalid JSON payload: %s (raw: %s)", e, msg.payload)
                 except Exception as e:
@@ -151,36 +151,54 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.error("Error setting up MQTT: %s", e)
 
-    async def _handle_mqtt_payload(self, payload):
+    async def _handle_mqtt_payload(self, topic, payload):
         """Update data with MQTT updates in the main loop."""
-        _LOGGER.debug("MQTT payload received: %s", payload)
-        
+        _LOGGER.debug("MQTT payload received: topic=%s payload=%s", topic, payload)
+
+        # Extract channel from topic: /downlink/vehicle/{id}/realtimeDate/{channel}
+        parts = topic.split("/")
+        channel = parts[-1] if parts else ""
+
         device_id = payload.get("device_id")
         if not device_id:
-            _LOGGER.debug("Payload has no device_id")
+            # Fallback: extract device_id from topic position
+            try:
+                device_id = parts[3]
+            except IndexError:
+                pass
+        if not device_id:
+            _LOGGER.debug("Payload has no device_id and topic has no device segment")
             return
-        
+
         if not self.data or device_id not in self.data:
             _LOGGER.debug("Device '%s' not found", device_id)
             return
-        
-        mqtt_to_ha_mapping = {
-            'state': 'vehicleState',
-        }
-        
-        old_state = self.data[device_id].get("vehicleState", "unknown")
-        
-        for mqtt_field, ha_field in mqtt_to_ha_mapping.items():
-            if mqtt_field in payload:
-                self.data[device_id][ha_field] = payload[mqtt_field]
-                _LOGGER.debug("Mapped %s=%s -> %s", mqtt_field, payload[mqtt_field], ha_field)
-        
-        for key in ['battery', 'timestamp', 'position', 'signal_strength']:
-            if key in payload:
-                self.data[device_id][key] = payload[key]
-        
-        new_state = self.data[device_id].get("vehicleState", "unknown")
-        
-        _LOGGER.debug("Device '%s': vehicleState %s -> %s", device_id, old_state, new_state)
-        
+
+        if channel == "state":
+            old_state = self.data[device_id].get("vehicleState", "unknown")
+            if "state" in payload:
+                self.data[device_id]["vehicleState"] = payload["state"]
+            for key in ["battery", "timestamp", "position", "signal_strength"]:
+                if key in payload:
+                    self.data[device_id][key] = payload[key]
+            new_state = self.data[device_id].get("vehicleState", "unknown")
+            _LOGGER.debug("Device '%s': vehicleState %s -> %s", device_id, old_state, new_state)
+
+        elif channel == "event":
+            event_type = payload.get("event", "")
+            level = payload.get("level", "")
+            _LOGGER.debug("Device '%s' event: type=%s level=%s", device_id, event_type, level)
+            # Propagate error events immediately so the error sensor updates in real time
+            if level == "error" or event_type in {"Error", "error", "isLifted", "stuck"}:
+                self.data[device_id]["error_code"] = event_type or level
+                self.data[device_id]["vehicleState"] = "Error"
+            elif level == "info" and event_type in {"errorRecovery", "clear"}:
+                self.data[device_id]["error_code"] = "none"
+
+        elif channel == "attributes":
+            attributes = payload.get("attributes", payload)
+            if isinstance(attributes, dict):
+                _LOGGER.debug("Device '%s' attributes: %s", device_id, list(attributes.keys()))
+                self.data[device_id].update(attributes)
+
         await self.async_set_updated_data(self.data)
