@@ -175,7 +175,7 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator):
                 self.data[device_id][ha_field] = payload[mqtt_field]
                 _LOGGER.debug("Mapped %s=%s -> %s", mqtt_field, payload[mqtt_field], ha_field)
         
-        for key in ['battery', 'timestamp']:
+        for key in ['battery', 'timestamp', 'position', 'signal_strength']:
             if key in payload:
                 self.data[device_id][key] = payload[key]
         

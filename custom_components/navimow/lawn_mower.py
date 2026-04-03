@@ -67,7 +67,13 @@ class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
         return LawnMowerActivity.DOCKED
 
     async def async_start_mowing(self):
-        await self.coordinator.api.async_send_command(self._id, "action.devices.commands.StartStop", {"on": True})
+        device_status = self.coordinator.data.get(self._id, {})
+        raw_state = device_status.get("vehicleState")
+        canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
+        if canonical == "paused":
+            await self.coordinator.api.async_send_command(self._id, "action.devices.commands.PauseUnpause", {"on": True})
+        else:
+            await self.coordinator.api.async_send_command(self._id, "action.devices.commands.StartStop", {"on": True})
         await self.coordinator.async_request_refresh()
     
     async def async_pause(self):

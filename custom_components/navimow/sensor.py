@@ -4,10 +4,15 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN
 
+_ERROR_RAW_STATES = {"Error", "error", "isLifted"}
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     devices = hass.data[DOMAIN][entry.entry_id]["devices"]
-    async_add_entities([NavimowBattery(coordinator, d) for d in devices])
+    async_add_entities(
+        [NavimowBattery(coordinator, d) for d in devices]
+        + [NavimowErrorSensor(coordinator, d) for d in devices]
+    )
 
 class NavimowBattery(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
@@ -26,3 +31,24 @@ class NavimowBattery(CoordinatorEntity, SensorEntity):
         device_status = self.coordinator.data.get(self._id, {})
         cap = device_status.get("capacityRemaining", [{}])
         return cap[0].get("rawValue") if cap else None
+
+
+class NavimowErrorSensor(CoordinatorEntity, SensorEntity):
+    _attr_icon = "mdi:alert-circle"
+
+    def __init__(self, coordinator, device_data):
+        super().__init__(coordinator)
+        self._id = device_data.get("id")
+        self._attr_name = f"{device_data.get('name')} Error"
+        self._attr_unique_id = f"{self._id}_error"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, self._id)})
+
+    @property
+    def native_value(self):
+        device_status = self.coordinator.data.get(self._id, {})
+        error_code = device_status.get("error_code")
+        if error_code and error_code != "none":
+            return error_code
+        if device_status.get("vehicleState") in _ERROR_RAW_STATES:
+            return device_status.get("vehicleState")
+        return "none"
