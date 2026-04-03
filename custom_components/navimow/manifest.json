@@ -5,9 +5,9 @@
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/niddu85/home-assistant-navimow",
-  "issue_tracker": "https://github.com/niddu85/home-assistant-navimow/issues",
   "integration_type": "device",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/niddu85/home-assistant-navimow/issues",
   "requirements": ["paho-mqtt>=1.6.1"],
   "version": "0.2.0"
 }
