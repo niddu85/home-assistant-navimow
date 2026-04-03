@@ -3,6 +3,7 @@
   "name": "Navimow (Unofficial)",
   "codeowners": ["@niddu85"],
   "config_flow": true,
+  "dependencies": ["http"],
   "documentation": "https://github.com/niddu85/home-assistant-navimow",
   "issue_tracker": "https://github.com/niddu85/home-assistant-navimow/issues",
   "integration_type": "device",
