@@ -48,13 +48,10 @@ class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
 
     @property
     def activity(self) -> LawnMowerActivity:
-        """Legge la stringa esatta da vehicleState e la mappa."""
+        """Get current mowing activity state."""
         device_status = self.coordinator.data.get(self._id, {})
         
-        # Prende la stringa (es. "isPaused")
         raw_state = device_status.get("vehicleState")
-        
-        # Traduce la stringa usando il dizionario
         canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
 
         if canonical == "mowing":
