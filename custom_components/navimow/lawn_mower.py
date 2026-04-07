@@ -1,7 +1,10 @@
 from homeassistant.components.lawn_mower import LawnMowerEntity, LawnMowerEntityFeature, LawnMowerActivity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
+import logging
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 RAW_STATE_TO_CANONICAL = {
     "isDocked": "docked",
@@ -36,6 +39,7 @@ class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
         self._id = device_data.get("id")
         self._attr_name = device_data.get("name")
         self._attr_unique_id = self._id
+        self._api = coordinator.api
         
         # Questo collega l'entità al dispositivo fisico nella UI
         self._attr_device_info = DeviceInfo(
@@ -66,20 +70,62 @@ class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
         # Default per idle, docked o stati sconosciuti
         return LawnMowerActivity.DOCKED
 
+    async def _async_send_command(self, command: str, params: dict = None, label: str = "") -> None:
+        """Send command to device with proactive token refresh.
+        
+        Ensures OAuth token is valid before sending the command to avoid
+        CODE_OAUTH_INFO_ILLEGAL errors when token has expired.
+        """
+        try:
+            await self.coordinator._async_ensure_valid_token()
+        except Exception as err:
+            _LOGGER.error("Failed to refresh token before sending command: %s", err)
+            raise
+        
+        await self._api.async_send_command(self._id, command, params)
+        if label:
+            _LOGGER.info("%s for device %s", label, self._id)
+        await self.coordinator.async_request_refresh()
+
     async def async_start_mowing(self):
         device_status = self.coordinator.data.get(self._id, {})
         raw_state = device_status.get("vehicleState")
         canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
-        if canonical == "paused":
-            await self.coordinator.api.async_send_command(self._id, "action.devices.commands.PauseUnpause", {"on": True})
-        else:
-            await self.coordinator.api.async_send_command(self._id, "action.devices.commands.StartStop", {"on": True})
-        await self.coordinator.async_request_refresh()
+        try:
+            if canonical == "paused":
+                await self._async_send_command(
+                    "action.devices.commands.PauseUnpause",
+                    {"on": True},
+                    "Resumed mowing"
+                )
+            else:
+                await self._async_send_command(
+                    "action.devices.commands.StartStop",
+                    {"on": True},
+                    "Started mowing"
+                )
+        except Exception as err:
+            _LOGGER.error("Failed to start mowing for device %s: %s", self._id, err)
+            raise
     
     async def async_pause(self):
-        await self.coordinator.api.async_send_command(self._id, "action.devices.commands.PauseUnpause", {"on": False})
-        await self.coordinator.async_request_refresh()
+        try:
+            await self._async_send_command(
+                "action.devices.commands.PauseUnpause",
+                {"on": False},
+                "Paused mowing"
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to pause mowing for device %s: %s", self._id, err)
+            raise
 
     async def async_dock(self):
-        await self.coordinator.api.async_send_command(self._id, "action.devices.commands.Dock")
-        await self.coordinator.async_request_refresh()
+        try:
+            await self._async_send_command(
+                "action.devices.commands.Dock",
+                None,
+                "Docked"
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to dock device %s: %s", self._id, err)
+            raise

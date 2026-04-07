@@ -3,6 +3,8 @@ import logging
 import uuid
 from aiohttp import ClientSession
 
+from .const import CLIENT_ID, CLIENT_SECRET, TOKEN_URL
+
 _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://navimow-fra.ninebot.com/openapi/smarthome"
@@ -68,18 +70,15 @@ class NavimowApiClient:
 
     async def async_refresh_token(self, refresh_token: str) -> dict:
         """Request new access token using refresh token."""
-        url = "https://navimow-fra.ninebot.com/openapi/oauth/getAccessToken"
-        import os
-        client_secret = os.getenv("NAVIMOW_CLIENT_SECRET", "")
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": "homeassistant",
-            "client_secret": client_secret
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         try:
-            async with self._session.post(url, data=payload, headers=headers) as response:
+            async with self._session.post(TOKEN_URL, data=payload, headers=headers) as response:
                 return await response.json()
         except Exception as e:
             _LOGGER.error("Error during token refresh: %s", e)
