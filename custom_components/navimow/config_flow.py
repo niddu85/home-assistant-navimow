@@ -10,14 +10,9 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers.network import get_url
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN
+from .const import DOMAIN, CLIENT_ID, CLIENT_SECRET, TOKEN_URL, AUTH_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
-
-CLIENT_ID = "homeassistant"
-CLIENT_SECRET = "57056e15-722e-42be-bbaa-b0cbfb208a52"
-TOKEN_URL = "https://navimow-fra.ninebot.com/openapi/oauth/getAccessToken"
-AUTH_BASE_URL = "https://navimow-h5-fra.willand.com/smartHome/login"
 
 
 class NavimowCallbackView(HomeAssistantView):

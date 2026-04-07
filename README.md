@@ -124,7 +124,6 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 
 - Ensure your Navimow account is still active
 - Try removing the integration and re-adding it
-- Check that `NAVIMOW_CLIENT_SECRET` environment variable is set
 
 ## 🤝 Contributing
 
