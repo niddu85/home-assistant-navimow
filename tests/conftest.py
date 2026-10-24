@@ -10,7 +10,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.navimow.api import API_BASE_URL, SMARTHOME_URL
 from custom_components.navimow.const import (
     CONF_ACCESS_TOKEN,
+    CONF_DOCK_LATITUDE,
+    CONF_DOCK_LONGITUDE,
     CONF_EXPIRES_AT,
+    CONF_MAP_ROTATION,
     CONF_REFRESH_TOKEN,
     DOMAIN,
 )
@@ -26,7 +29,6 @@ STATUS = {
     "vehicleState": "isDocked",
     "online": True,
     "capacityRemaining": [{"rawValue": 80}],
-    "position": {"lat": 45.0, "lng": 9.0},
 }
 TOKEN_RESPONSE = {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600}
 
@@ -53,6 +55,7 @@ def config_entry() -> MockConfigEntry:
             CONF_REFRESH_TOKEN: "refresh",
             CONF_EXPIRES_AT: time.time() + 3600,
         },
+        options={CONF_DOCK_LATITUDE: 45.0, CONF_DOCK_LONGITUDE: 9.0, CONF_MAP_ROTATION: 0.0},
     )
 
 

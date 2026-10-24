@@ -1,7 +1,7 @@
 """Tests for the Navimow MQTT client lifecycle."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -116,14 +116,21 @@ async def test_subscribe_and_messages(hass: HomeAssistant, api, paho_clients) ->
     mqtt_client._on_connect(clients[0], None, None, _rc(), None)
     topics = [c.args[0] for c in clients[0].subscribe.call_args_list]
     assert "/downlink/vehicle/dev1/realtimeDate/state" in topics
-    assert len(topics) == 3
+    assert "/downlink/vehicle/dev1/realtimeDate/location" in topics
+    assert len(topics) == 4
 
     msg = MagicMock(topic="/downlink/vehicle/dev1/realtimeDate/state", payload=b'{"state": "isRunning"}')
     mqtt_client._on_message(clients[0], None, msg)
+    location = MagicMock(topic="/downlink/vehicle/dev1/realtimeDate/location", payload=b"[]")
+    mqtt_client._on_message(clients[0], None, location)
     mqtt_client._on_message(clients[0], None, MagicMock(topic="t", payload=b"not json"))
+    mqtt_client._on_message(clients[0], None, MagicMock(topic="t", payload=b"42"))
     await hass.async_block_till_done()
 
-    callback.assert_called_once_with(msg.topic, {"state": "isRunning"})
+    assert callback.call_args_list == [
+        call(msg.topic, {"state": "isRunning"}),
+        call(location.topic, []),
+    ]
     await mqtt_client.async_stop()
 
 

@@ -177,7 +177,7 @@ async def test_mqtt_connect_and_receive(api: NavimowApiClient) -> None:
         assert not mqtt.disconnected.is_set(), "MQTT disconnected while waiting"
 
     print(f"subscription results: {[str(code) for code in mqtt.suback_codes]}")
-    assert len(mqtt.suback_codes) == 3 * len(device_ids), "missing SUBACKs"
+    assert len(mqtt.suback_codes) == 4 * len(device_ids), "missing SUBACKs"
     assert not any(code.is_failure for code in mqtt.suback_codes), "subscription refused"
     capture("mqtt_messages", mqtt.raw_messages)
     print(f"messages received: {len(mqtt.messages)}")

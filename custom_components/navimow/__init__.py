@@ -62,8 +62,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
             hass, mqtt_client.async_start(), "navimow_mqtt_start"
         )
 
+    # Options (dock position, map rotation) are read live by the entities
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_entry_updated(hass: HomeAssistant, entry: NavimowConfigEntry) -> None:
+    entry.runtime_data.async_update_listeners()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> bool:

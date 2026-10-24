@@ -23,7 +23,9 @@ MQTT_KEEPALIVE = 60
 # The MQTT credentials endpoint rejects calls less than a minute apart
 RECONNECT_MIN_DELAY = 60
 RECONNECT_MAX_DELAY = 300
-TOPIC_CHANNELS = ("state", "event", "attributes")
+# "location" is not in the official SDK: it carries the position on the
+# mower's map every few seconds while it moves
+TOPIC_CHANNELS = ("state", "event", "attributes", "location")
 
 
 class NavimowMqttClient:
@@ -41,7 +43,7 @@ class NavimowMqttClient:
         entry: ConfigEntry,
         api: NavimowApiClient,
         device_ids: list[str],
-        message_callback: Callable[[str, dict[str, Any]], None],
+        message_callback: Callable[[str, Any], None],
     ) -> None:
         self._hass = hass
         self._entry = entry
@@ -142,7 +144,7 @@ class NavimowMqttClient:
         except ValueError:
             _LOGGER.debug("Ignoring non-JSON MQTT payload on %s", msg.topic)
             return
-        if isinstance(payload, dict):
+        if isinstance(payload, dict | list):
             self._hass.loop.call_soon_threadsafe(
                 self._message_callback, msg.topic, payload
             )

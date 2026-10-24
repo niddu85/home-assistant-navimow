@@ -15,6 +15,9 @@ from yarl import URL
 
 from custom_components.navimow.const import (
     CONF_ACCESS_TOKEN,
+    CONF_DOCK_LATITUDE,
+    CONF_DOCK_LONGITUDE,
+    CONF_MAP_ROTATION,
     CONF_REFRESH_TOKEN,
     DOMAIN,
     TOKEN_URL,
@@ -65,7 +68,18 @@ async def test_full_flow(hass: HomeAssistant, hass_client_no_auth, mock_oauth) -
     assert resp.status == 200
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "dock"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"dock_location": {"latitude": 45.5, "longitude": 9.25}, "map_rotation": 30},
+    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"] == {
+        CONF_DOCK_LATITUDE: 45.5,
+        CONF_DOCK_LONGITUDE: 9.25,
+        CONF_MAP_ROTATION: 30.0,
+    }
     assert result["title"] == "Garden"
     assert result["data"][CONF_ACCESS_TOKEN] == "new-access"
     assert result["data"][CONF_REFRESH_TOKEN] == "new-refresh"
@@ -85,7 +99,7 @@ async def test_callback_without_state_single_flow(
     assert resp.status == 200
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["step_id"] == "dock"
 
 
 async def test_callback_rejects_unknown_state(
@@ -110,7 +124,7 @@ async def test_second_flow_gets_its_own_code(
     resp = await client.get("/api/navimow/callback?code=the-code")
     assert resp.status == 200
     result = await hass.config_entries.flow.async_configure(second["flow_id"])
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["step_id"] == "dock"
 
 
 async def test_token_exchange_rejected(
@@ -179,3 +193,41 @@ async def test_reauth_wrong_account(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "wrong_account"
     assert entry.data[CONF_ACCESS_TOKEN] == "a"
+
+
+async def test_dock_defaults_to_home(
+    hass: HomeAssistant, hass_client_no_auth, mock_oauth
+) -> None:
+    result = await _start_user_flow(hass)
+    client = await hass_client_no_auth()
+    await client.get(f"/api/navimow/callback?code=c&state={URL(result['url']).query['state']}")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+
+    defaults = {key.schema: key.default() for key in result["data_schema"].schema}
+    assert defaults["dock_location"] == {
+        "latitude": hass.config.latitude,
+        "longitude": hass.config.longitude,
+    }
+    assert defaults["map_rotation"] == 0
+
+
+async def test_options_flow(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ACCESS_TOKEN: "a", CONF_REFRESH_TOKEN: "r"},
+        options={CONF_DOCK_LATITUDE: 45.0, CONF_DOCK_LONGITUDE: 9.0, CONF_MAP_ROTATION: 0.0},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"dock_location": {"latitude": 45.1, "longitude": 9.1}, "map_rotation": -12.5},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {
+        CONF_DOCK_LATITUDE: 45.1,
+        CONF_DOCK_LONGITUDE: 9.1,
+        CONF_MAP_ROTATION: -12.5,
+    }

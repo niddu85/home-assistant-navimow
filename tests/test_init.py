@@ -64,6 +64,7 @@ async def test_setup_creates_entities(
     assert hass.states.get(BATTERY).state == "80"
     assert hass.states.get(ERROR).state == "none"
     assert hass.states.get(CONNECTIVITY).state == "on"
+    # No position received yet: a docked mower is at the dock
     tracker = hass.states.get(TRACKER)
     assert tracker.attributes["latitude"] == 45.0
     assert tracker.attributes["longitude"] == 9.0
@@ -194,3 +195,96 @@ async def test_mqtt_error_survives_poll_while_still_in_error(
     await hass.async_block_till_done()
 
     assert hass.states.get(ERROR).state == "stuck"
+
+
+LOCATION_TOPIC = "/downlink/vehicle/dev1/realtimeDate/location"
+
+
+def _pose(x: float, y: float, theta: float = 0.0) -> list[dict]:
+    """A location message as sent by the mower (numbers as strings)."""
+    return [
+        {
+            "postureX": str(x),
+            "postureY": str(y),
+            "postureTheta": str(theta),
+            "time": 1,
+            "type": 1,
+            "vehicleState": 4,
+        }
+    ]
+
+
+async def test_location_updates_tracker(
+    hass: HomeAssistant, aioclient_mock, config_entry, mock_mqtt
+) -> None:
+    _mock_api(aioclient_mock, {**STATUS, "vehicleState": "isRunning"})
+    await _setup(hass, config_entry)
+    assert hass.states.get(TRACKER).attributes.get("latitude") is None
+    handle = config_entry.runtime_data.async_handle_mqtt_message
+
+    # Rotation 0: X points east, Y points north
+    handle(LOCATION_TOPIC, _pose(10, 0, 1.5708))
+    await hass.async_block_till_done()
+    tracker = hass.states.get(TRACKER)
+    assert tracker.attributes["latitude"] == pytest.approx(45.0)
+    assert tracker.attributes["longitude"] > 9.0
+    assert tracker.attributes["local_x"] == 10
+    assert tracker.attributes["local_heading"] == 90.0
+    assert tracker.attributes["distance_from_dock"] == 10
+
+    handle(
+        LOCATION_TOPIC,
+        [
+            {"type": 2, "currentMowProgress": 2500, "currentMowBoundary": 9},
+            {"type": 4, "taskDelay": False},
+        ],
+    )
+    await hass.async_block_till_done()
+    tracker = hass.states.get(TRACKER)
+    assert tracker.attributes["mowing_progress"] == 25
+    assert tracker.attributes["mowing_zone"] == 9
+    assert tracker.attributes["local_x"] == 10
+
+    # Malformed and foreign messages are ignored
+    handle(LOCATION_TOPIC, [{"type": 1, "postureX": "bad"}, "junk"])
+    handle(LOCATION_TOPIC, {"not": "a list"})
+    handle("/downlink/vehicle/other/realtimeDate/location", _pose(99, 99))
+    await hass.async_block_till_done()
+    assert hass.states.get(TRACKER).attributes["local_x"] == 10
+
+
+async def test_rotation_option_applies_immediately(
+    hass: HomeAssistant, aioclient_mock, config_entry, mock_mqtt
+) -> None:
+    _mock_api(aioclient_mock)
+    await _setup(hass, config_entry)
+    config_entry.runtime_data.async_handle_mqtt_message(LOCATION_TOPIC, _pose(10, 0))
+    await hass.async_block_till_done()
+
+    # Rotating the map 90 degrees clockwise turns the X axis to the south
+    hass.config_entries.async_update_entry(
+        config_entry, options={**config_entry.options, "map_rotation": 90.0}
+    )
+    await hass.async_block_till_done()
+    tracker = hass.states.get(TRACKER)
+    assert tracker.attributes["latitude"] < 45.0
+    assert tracker.attributes["longitude"] == pytest.approx(9.0)
+
+
+async def test_location_survives_poll_and_does_not_delay_it(
+    hass: HomeAssistant, aioclient_mock, config_entry, mock_mqtt
+) -> None:
+    _mock_api(aioclient_mock)
+    await _setup(hass, config_entry)
+    coordinator = config_entry.runtime_data
+    polls = aioclient_mock.call_count
+
+    # Positions every few seconds must not postpone the 30 seconds REST poll
+    now = dt_util.utcnow()
+    for second in range(0, 34, 3):
+        coordinator.async_handle_mqtt_message(LOCATION_TOPIC, _pose(second, 1))
+        async_fire_time_changed(hass, now + timedelta(seconds=second))
+        await hass.async_block_till_done()
+
+    assert aioclient_mock.call_count > polls
+    assert hass.states.get(TRACKER).attributes["local_x"] == 33

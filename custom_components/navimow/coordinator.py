@@ -18,7 +18,7 @@ type NavimowConfigEntry = ConfigEntry[NavimowDataUpdateCoordinator]
 
 MQTT_ERROR_EVENTS = {"Error", "error", "isLifted", "stuck"}
 MQTT_RECOVERY_EVENTS = {"errorRecovery", "clear"}
-MQTT_STATE_KEYS = ("battery", "timestamp", "position", "signal_strength")
+MQTT_STATE_KEYS = ("battery", "timestamp", "signal_strength")
 
 
 class NavimowDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -43,6 +43,9 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
         self.api = api
         self.devices = devices
         self.device_ids = [d["id"] for d in devices]
+        # Data from the MQTT location channel, kept apart from the REST status
+        # because each poll replaces the whole status
+        self.locations: dict[str, dict[str, Any]] = {}
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -66,13 +69,20 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
         return data
 
     @callback
-    def async_handle_mqtt_message(self, topic: str, payload: dict[str, Any]) -> None:
+    def async_handle_mqtt_message(self, topic: str, payload: Any) -> None:
         """Merge an MQTT update into the coordinator data."""
         # Topic format: /downlink/vehicle/{device_id}/realtimeDate/{channel}
         parts = topic.split("/")
         channel = parts[-1]
-        device_id = payload.get("device_id") or (parts[3] if len(parts) > 3 else None)
+        topic_device_id = parts[3] if len(parts) > 3 else None
 
+        if channel == "location":
+            self._async_handle_location(topic_device_id, payload)
+            return
+        if not isinstance(payload, dict):
+            return
+
+        device_id = payload.get("device_id") or topic_device_id
         if not self.data or device_id not in self.data:
             _LOGGER.debug("MQTT update for unknown device '%s'", device_id)
             return
@@ -107,4 +117,41 @@ class NavimowDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
         else:
             return
 
-        self.async_set_updated_data({**self.data, device_id: status})
+        # Not async_set_updated_data: it reschedules the REST poll, which would
+        # never run while pushes keep arriving (positions come every 2 seconds)
+        self.data = {**self.data, device_id: status}
+        self.async_update_listeners()
+
+    @callback
+    def _async_handle_location(self, device_id: str | None, payload: Any) -> None:
+        """Decode the location channel: a JSON array of items keyed by type."""
+        if device_id not in self.device_ids or not isinstance(payload, list):
+            return
+        previous = self.locations.get(device_id, {})
+        location = dict(previous)
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == 1:
+                # Pose: meters from the dock on the mower's map, heading in radians
+                try:
+                    location["x"] = float(item["postureX"])
+                    location["y"] = float(item["postureY"])
+                    location["theta"] = float(item.get("postureTheta", 0))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            elif item_type == 2:
+                # Mowing progress (0-10000) and zone the mower is in
+                if "currentMowProgress" in item:
+                    location["progress"] = item["currentMowProgress"]
+                if "currentMowBoundary" in item:
+                    location["zone"] = item["currentMowBoundary"]
+            elif item_type == 3:
+                # Zones requested at mow start, absent when mowing everything
+                location["target_zones"] = item.get("partitionIds")
+            elif item_type == 4:
+                location["task_delay"] = item.get("taskDelay")
+        if location != previous:
+            self.locations[device_id] = location
+            self.async_update_listeners()

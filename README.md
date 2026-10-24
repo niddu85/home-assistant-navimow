@@ -24,7 +24,7 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
   - Connectivity status (online/offline)
 
 - **Device Tracker:**
-  - GPS location tracking with real-time position updates
+  - Position on the map, updated every ~2 seconds while the mower moves
 
 - **Data Updates:**
   - Polling updates every 30 seconds via REST API
@@ -74,7 +74,7 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 2. Click **+ Add Integration** and search for **Navimow**
 3. Enter a name for the account
 4. A browser window will open on the Navimow login page
-5. After logging in, Home Assistant completes the setup automatically
+5. After logging in, place the pin on the charging dock and set the map rotation (see [Position and map rotation](#position-and-map-rotation))
 
 The login redirects back to `<your Home Assistant URL>/api/navimow/callback`, so the browser must be able to reach Home Assistant at its configured URL (**Settings** → **System** → **Network**).
 
@@ -105,7 +105,18 @@ The login redirects back to `<your Home Assistant URL>/api/navimow/callback`, so
 ### Device Tracker
 
 - Entity ID: `device_tracker.{device_name}_position`
-- Attributes: `latitude`, `longitude`
+- Attributes: `latitude`, `longitude`, `local_x`/`local_y` (meters from the dock), `local_heading` (degrees, on the mower map), `distance_from_dock`, `mowing_zone` and `mowing_progress` (%) when reported
+
+#### Position and map rotation
+
+The mower does not report GPS coordinates: through an undocumented MQTT channel (`/realtimeDate/location`) it reports its position in meters from the dock, on its own map. The integration converts it to GPS using two options, asked during setup and editable later from **Settings** → **Devices & Services** → **Navimow** → **Configure**:
+
+- **Dock location:** GPS position of the charging dock (defaults to the Home Assistant home location)
+- **Map rotation:** the mower map axes are not aligned with north. With 0° the map is assumed to point north; positive values turn it clockwise around the dock
+
+To calibrate the rotation, watch the track on the Home Assistant map while the mower works and change the rotation until it matches the lawn. The change applies immediately.
+
+Until the first position arrives, a docked mower is shown at the dock.
 
 ## 🔄 How It Works
 

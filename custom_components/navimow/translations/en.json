@@ -15,6 +15,18 @@
       "reauth_confirm": {
         "title": "Reauthenticate Navimow",
         "description": "The Navimow session has expired. Log in again to restore the connection."
+      },
+      "dock": {
+        "title": "Dock position",
+        "description": "The mower reports its position in meters from the dock. To show it on the map, place the pin on the dock and set the map rotation.\n\nWith rotation 0° the mower map is assumed to point north. If the track on the map is rotated compared to the lawn, adjust the rotation in the integration options: positive values turn it clockwise.",
+        "data": {
+          "dock_location": "Dock location",
+          "map_rotation": "Map rotation"
+        },
+        "data_description": {
+          "dock_location": "GPS position of the charging dock.",
+          "map_rotation": "Clockwise rotation, in degrees, needed to align the mower map with north."
+        }
       }
     },
     "abort": {
@@ -35,6 +47,22 @@
     "device_tracker": {
       "position": {
         "name": "Position"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mower position on the map",
+        "description": "Adjust the dock position and the map rotation. Positive rotation values turn the track clockwise around the dock.",
+        "data": {
+          "dock_location": "Dock location",
+          "map_rotation": "Map rotation"
+        },
+        "data_description": {
+          "dock_location": "GPS position of the charging dock.",
+          "map_rotation": "Clockwise rotation, in degrees, needed to align the mower map with north."
+        }
       }
     }
   }

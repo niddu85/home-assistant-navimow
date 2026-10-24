@@ -9,13 +9,26 @@ from typing import Any
 import voluptuous as vol
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.http import KEY_HASS
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.helpers.selector import (
+    LocationSelector,
+    LocationSelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 from homeassistant.util.hass_dict import HassKey
 
 from .api import (
@@ -29,7 +42,10 @@ from .api import (
 from .const import (
     CALLBACK_PATH,
     CONF_ACCESS_TOKEN,
+    CONF_DOCK_LATITUDE,
+    CONF_DOCK_LONGITUDE,
     CONF_EXPIRES_AT,
+    CONF_MAP_ROTATION,
     CONF_REFRESH_TOKEN,
     DOMAIN,
 )
@@ -37,6 +53,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 CONF_ACCOUNT_NAME = "account_name"
+CONF_DOCK_LOCATION = "dock_location"
 
 # OAuth state -> flow_id of the flows waiting for the redirect
 DATA_PENDING_FLOWS: HassKey[dict[str, str]] = HassKey(f"{DOMAIN}_pending_flows")
@@ -105,6 +122,42 @@ class NavimowCallbackView(HomeAssistantView):
         )
 
 
+def _dock_schema(hass: HomeAssistant, options: Mapping[str, Any]) -> vol.Schema:
+    """Schema asking for the dock GPS position and the map rotation."""
+    location = {
+        "latitude": options.get(CONF_DOCK_LATITUDE, hass.config.latitude),
+        "longitude": options.get(CONF_DOCK_LONGITUDE, hass.config.longitude),
+    }
+    return vol.Schema(
+        {
+            vol.Required(CONF_DOCK_LOCATION, default=location): LocationSelector(
+                LocationSelectorConfig(radius=False)
+            ),
+            vol.Required(
+                CONF_MAP_ROTATION, default=options.get(CONF_MAP_ROTATION, 0)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=-180,
+                    max=180,
+                    step=0.5,
+                    unit_of_measurement="°",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
+
+
+def _dock_options(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Convert the dock form input to config entry options."""
+    location = user_input[CONF_DOCK_LOCATION]
+    return {
+        CONF_DOCK_LATITUDE: location["latitude"],
+        CONF_DOCK_LONGITUDE: location["longitude"],
+        CONF_MAP_ROTATION: float(user_input[CONF_MAP_ROTATION]),
+    }
+
+
 @callback
 def _async_register_callback_view(hass: HomeAssistant) -> None:
     """Register the OAuth callback view once per Home Assistant run."""
@@ -124,6 +177,13 @@ class NavimowConfigFlow(ConfigFlow, domain=DOMAIN):
         self._redirect_uri: str | None = None
         self._state: str | None = None
         self._code: str | None = None
+        self._entry_data: dict[str, Any] | None = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> NavimowOptionsFlow:
+        """Return the options flow."""
+        return NavimowOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -217,7 +277,20 @@ class NavimowConfigFlow(ConfigFlow, domain=DOMAIN):
         if device_ids & self._configured_device_ids():
             return self.async_abort(reason="already_configured")
 
-        return self.async_create_entry(title=self._account_name, data=entry_data)
+        self._entry_data = entry_data
+        return await self.async_step_dock()
+
+    async def async_step_dock(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask where the dock is, to convert the mower position to GPS."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title=self._account_name,
+                data=self._entry_data,
+                options=_dock_options(user_input),
+            )
+        return self.async_show_form(step_id="dock", data_schema=_dock_schema(self.hass, {}))
 
     @callback
     def _configured_device_ids(self, entry_id: str | None = None) -> set[str]:
@@ -243,3 +316,16 @@ class NavimowConfigFlow(ConfigFlow, domain=DOMAIN):
         """Forget the pending OAuth state when the flow is closed."""
         if self._state:
             self.hass.data.get(DATA_PENDING_FLOWS, {}).pop(self._state, None)
+
+
+class NavimowOptionsFlow(OptionsFlow):
+    """Change the dock position and map rotation."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=_dock_options(user_input))
+        return self.async_show_form(
+            step_id="init", data_schema=_dock_schema(self.hass, self.config_entry.options)
+        )
