@@ -1,0 +1,309 @@
+"""Live tests against the real Navimow cloud (read-only unless enabled)."""
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+
+import pytest
+
+from custom_components.navimow.api import NavimowApiClient
+from custom_components.navimow.const import OFFLINE_STATES
+from custom_components.navimow.coordinator import NavimowDataUpdateCoordinator
+from custom_components.navimow.geo import local_to_gps
+from custom_components.navimow.lawn_mower import RAW_STATE_TO_ACTIVITY
+from custom_components.navimow.mqtt import (
+    NavimowMqttClient,
+    _close_client,
+    _start_client,
+)
+
+from .conftest import capture
+
+MQTT_WAIT = int(os.environ.get("NAVIMOW_LIVE_MQTT_WAIT", "30"))
+COMMANDS_ENABLED = os.environ.get("NAVIMOW_LIVE_COMMANDS") == "1"
+MOVE_ENABLED = os.environ.get("NAVIMOW_LIVE_MOVE") == "1"
+MOW_SECONDS = int(os.environ.get("NAVIMOW_LIVE_MOW_SECONDS", "90"))
+RETURN_SECONDS = int(os.environ.get("NAVIMOW_LIVE_RETURN_SECONDS", "120"))
+# Extra topics to explore, e.g. "#" or "/downlink/vehicle/{id}/#" ({id} = device id)
+EXTRA_TOPICS = [t for t in os.environ.get("NAVIMOW_LIVE_EXTRA_TOPICS", "").split(",") if t]
+STATUS_INTERVAL = 30
+MIN_BATTERY = 30
+# Dock position and map rotation used to convert poses (default: relative to 0,0)
+DOCK_LATITUDE = float(os.environ.get("NAVIMOW_LIVE_DOCK_LAT", "0"))
+DOCK_LONGITUDE = float(os.environ.get("NAVIMOW_LIVE_DOCK_LON", "0"))
+MAP_ROTATION = float(os.environ.get("NAVIMOW_LIVE_MAP_ROTATION", "0"))
+
+
+async def _statuses(api: NavimowApiClient) -> dict:
+    devices = await api.async_get_devices()
+    return await api.async_get_vehicles_status([d["id"] for d in devices])
+
+
+def _battery(status: dict) -> float | None:
+    capacity = status.get("capacityRemaining")
+    if isinstance(capacity, list) and capacity:
+        return capacity[0].get("rawValue")
+    return None
+
+
+@asynccontextmanager
+async def _mqtt_listener(
+    api: NavimowApiClient, device_ids: list[str]
+) -> AsyncIterator[SimpleNamespace]:
+    """Connect with the integration's MQTT client code and collect messages."""
+    loop = asyncio.get_running_loop()
+    started = time.monotonic()
+    connected = asyncio.Event()
+    result = SimpleNamespace(
+        messages=[], raw_messages=[], suback_codes=[], extra_subacks={},
+        gps_track=[], disconnected=asyncio.Event(),
+    )
+    # Decode location messages with the integration's coordinator code
+    decoder = SimpleNamespace(
+        device_ids=device_ids, locations={}, async_update_listeners=lambda: None
+    )
+    result.locations = decoder.locations
+
+    def on_message(topic: str, payload) -> None:
+        elapsed = time.monotonic() - started
+        result.messages.append({"t": round(elapsed, 1), "topic": topic, "payload": payload})
+        if not topic.endswith("/location"):
+            print(f"[{elapsed:5.0f}s] MQTT {topic.rsplit('/', 1)[-1]}: {payload}")
+            return
+        device_id = topic.split("/")[3]
+        NavimowDataUpdateCoordinator._async_handle_location(decoder, device_id, payload)
+        location = decoder.locations.get(device_id, {})
+        if "x" not in location:
+            return
+        lat, lon = local_to_gps(
+            location["x"], location["y"], DOCK_LATITUDE, DOCK_LONGITUDE, MAP_ROTATION
+        )
+        result.gps_track.append({"t": round(elapsed, 1), "lat": lat, "lon": lon, **location})
+        print(
+            f"[{elapsed:5.0f}s] pose x={location['x']} y={location['y']} "
+            f"-> {lat:.7f}, {lon:.7f} zone={location.get('zone')} "
+            f"progress={location.get('progress')}"
+        )
+
+    mqtt_client = NavimowMqttClient(
+        SimpleNamespace(loop=loop), None, api, device_ids, on_message
+    )
+    # Reconnecting needs a config entry: here only record that it would happen
+    mqtt_client._async_schedule_reconnect = lambda client: result.disconnected.set()
+
+    # Fetched only once: the endpoint rejects calls less than a minute apart
+    info = await api.async_get_mqtt_info()
+    capture("mqtt_userInfo", info)
+    print(f"\nmqtt info fields: {sorted(info)}")
+    token = await api.async_get_access_token()
+    client, hostname = await asyncio.to_thread(mqtt_client._create_client, info, token)
+    on_connect = client.on_connect
+
+    def _on_connect(*args):
+        on_connect(*args)
+        if not args[3].is_failure:
+            loop.call_soon_threadsafe(connected.set)
+
+    client.on_connect = _on_connect
+    extra_mids: dict[int, str] = {}
+
+    def on_subscribe(c, u, mid, codes, props) -> None:
+        if mid in extra_mids:
+            result.extra_subacks[extra_mids[mid]] = [str(code) for code in codes]
+        else:
+            result.suback_codes.extend(codes)
+
+    integration_on_message = client.on_message
+
+    def on_raw_message(c, u, msg) -> None:
+        # Record everything: the integration only accepts JSON objects
+        elapsed = time.monotonic() - started
+        text = msg.payload.decode("utf-8", errors="replace")
+        result.raw_messages.append({"t": round(elapsed, 1), "topic": msg.topic, "raw": text})
+        channels = ("state", "event", "attributes", "location")
+        if not any(msg.topic.endswith(f"/realtimeDate/{ch}") for ch in channels):
+            print(f"[{elapsed:5.0f}s] MQTT RAW {msg.topic}: {text[:300]}")
+        integration_on_message(c, u, msg)
+
+    client.on_subscribe = on_subscribe
+    client.on_message = on_raw_message
+    mqtt_client._client = client
+    await asyncio.to_thread(_start_client, client, hostname)
+    try:
+        await asyncio.wait(
+            [
+                asyncio.create_task(connected.wait()),
+                asyncio.create_task(result.disconnected.wait()),
+            ],
+            timeout=20,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        assert connected.is_set(), "MQTT connection refused or timed out"
+        for topic in EXTRA_TOPICS:
+            for device_id in device_ids if "{id}" in topic else [None]:
+                full = topic.replace("{id}", device_id) if device_id else topic
+                _, mid = client.subscribe(full)
+                extra_mids[mid] = full
+        await asyncio.sleep(2)
+        if EXTRA_TOPICS:
+            print(f"extra subscriptions: {result.extra_subacks}")
+        yield result
+    finally:
+        await asyncio.to_thread(_close_client, client)
+
+
+async def test_token_refresh(api: NavimowApiClient) -> None:
+    old_access, old_refresh = api._access_token, api._refresh_token
+    await api._async_refresh_token(rejected_token=old_access)
+
+    assert api._access_token != old_access
+    print(f"\nrefresh token rotated: {api._refresh_token != old_refresh}")
+    print(f"token lifetime: {api._expires_at - time.time():.0f}s")
+    # The new token must work
+    await api.async_get_devices()
+
+
+async def test_devices(api: NavimowApiClient) -> None:
+    devices = await api.async_get_devices()
+    capture("authList_devices", devices)
+
+    assert devices, "no mower linked to the account"
+    for device in devices:
+        assert device.get("id")
+        print(f"\ndevice fields: {sorted(device)}")
+
+
+async def test_vehicle_status(api: NavimowApiClient) -> None:
+    statuses = await _statuses(api)
+    capture("getVehicleStatus", statuses)
+
+    assert statuses
+    for device_id, status in statuses.items():
+        print(f"\n{device_id} status fields: {sorted(status)}")
+        state = status.get("vehicleState")
+        print(f"vehicleState: {state!r}, online: {status.get('online')!r}")
+        assert state in RAW_STATE_TO_ACTIVITY or state in OFFLINE_STATES, (
+            f"vehicleState {state!r} is not mapped"
+        )
+
+        capacity = status.get("capacityRemaining")
+        print(f"capacityRemaining: {capacity!r}")
+        assert isinstance(capacity, list)
+        assert isinstance(capacity[0].get("rawValue"), int | float)
+        assert 0 <= capacity[0]["rawValue"] <= 100
+
+        position = status.get("position")
+        fields = sorted(position) if isinstance(position, dict) else position
+        print(f"position fields: {fields!r}")
+
+
+async def test_mqtt_connect_and_receive(api: NavimowApiClient) -> None:
+    device_ids = list(await _statuses(api))
+    async with _mqtt_listener(api, device_ids) as mqtt:
+        print(f"connected, waiting {MQTT_WAIT}s for messages")
+        await asyncio.sleep(MQTT_WAIT)
+        assert not mqtt.disconnected.is_set(), "MQTT disconnected while waiting"
+
+    print(f"subscription results: {[str(code) for code in mqtt.suback_codes]}")
+    assert len(mqtt.suback_codes) == 4 * len(device_ids), "missing SUBACKs"
+    assert not any(code.is_failure for code in mqtt.suback_codes), "subscription refused"
+    capture("mqtt_messages", mqtt.raw_messages)
+    print(f"messages received: {len(mqtt.messages)}")
+
+
+@pytest.mark.skipif(not COMMANDS_ENABLED, reason="set NAVIMOW_LIVE_COMMANDS=1 to send commands")
+async def test_command_without_side_effects(api: NavimowApiClient) -> None:
+    """Send a command that does not change what the mower is doing."""
+    statuses = await _statuses(api)
+    device_id, status = next(iter(statuses.items()))
+    state = status.get("vehicleState")
+
+    if state == "isDocked":
+        await api.async_send_command(device_id, "action.devices.commands.Dock")
+    elif state == "isPaused":
+        await api.async_send_command(
+            device_id, "action.devices.commands.PauseUnpause", {"on": False}
+        )
+    else:
+        pytest.skip(f"no harmless command for state {state!r}")
+
+    await asyncio.sleep(5)
+    after = (await _statuses(api))[device_id].get("vehicleState")
+    print(f"\nstate before: {state!r}, after: {after!r}")
+    assert after == state
+
+
+@pytest.mark.skipif(not MOVE_ENABLED, reason="set NAVIMOW_LIVE_MOVE=1 to let the mower move")
+async def test_mowing_cycle(api: NavimowApiClient) -> None:
+    """Start mowing, record status and MQTT traffic, then send the mower home.
+
+    The dock command is always sent, even if something fails midway.
+    """
+    statuses = await _statuses(api)
+    device_id, status = next(iter(statuses.items()))
+    if status.get("vehicleState") != "isDocked":
+        pytest.skip(f"mower must start docked, it is {status.get('vehicleState')!r}")
+    if (_battery(status) or 0) < MIN_BATTERY:
+        pytest.skip(f"battery too low: {_battery(status)}%")
+
+    started = time.monotonic()
+    rest_timeline: list[dict] = []
+
+    async def poll_rest() -> dict:
+        current = (await api.async_get_vehicles_status([device_id]))[device_id]
+        elapsed = time.monotonic() - started
+        rest_timeline.append({"t": round(elapsed, 1), "status": current})
+        print(
+            f"[{elapsed:5.0f}s] REST {current.get('vehicleState')} "
+            f"battery={_battery(current)} position={current.get('position')!r} "
+            f"extra={sorted(set(current) - {'id', 'vehicleState', 'capacityRemaining', 'descriptiveCapacityRemaining'})}"
+        )
+        return current
+
+    async with _mqtt_listener(api, [device_id]) as mqtt:
+        try:
+            await api.async_send_command(
+                device_id, "action.devices.commands.StartStop", {"on": True}
+            )
+            print(f"[{time.monotonic() - started:5.0f}s] start mowing sent")
+            while time.monotonic() - started < MOW_SECONDS:
+                await asyncio.sleep(STATUS_INTERVAL)
+                await poll_rest()
+        finally:
+            await api.async_send_command(device_id, "action.devices.commands.Dock")
+            print(f"[{time.monotonic() - started:5.0f}s] dock sent")
+
+        return_started = time.monotonic()
+        while time.monotonic() - return_started < RETURN_SECONDS:
+            await asyncio.sleep(STATUS_INTERVAL)
+            await poll_rest()
+
+    capture(
+        "mowing_cycle",
+        {
+            "rest": rest_timeline,
+            "mqtt": mqtt.messages,
+            "mqtt_raw": mqtt.raw_messages,
+            "gps_track": mqtt.gps_track,
+        },
+    )
+
+    states = [entry["status"].get("vehicleState") for entry in rest_timeline]
+    mqtt_keys = sorted(
+        {key for m in mqtt.messages if isinstance(m["payload"], dict) for key in m["payload"]}
+    )
+    print("\n=== summary ===")
+    print(f"REST states: {states}")
+    print(f"REST positions: {sum('position' in e['status'] for e in rest_timeline)}")
+    print(f"MQTT messages: {len(mqtt.messages)}, payload keys: {mqtt_keys}")
+    print(f"positions converted to GPS: {len(mqtt.gps_track)}")
+    print(f"last location: {mqtt.locations}")
+    topics = sorted({m["topic"] for m in mqtt.raw_messages})
+    print(f"MQTT topics seen: {topics}")
+
+    assert any(state not in (None, "isDocked") for state in states), "mower never left the dock"
+    assert mqtt.gps_track, "no position received through the integration code"

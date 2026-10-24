@@ -1,42 +1,77 @@
 """Segway Navimow integration."""
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN
-from .api import NavimowApiClient
-from .coordinator import NavimowDataUpdateCoordinator
+from .api import NavimowApiClient, NavimowAuthError, NavimowError
+from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN
+from .coordinator import NavimowConfigEntry, NavimowDataUpdateCoordinator
+from .mqtt import NavimowMqttClient
 
-PLATFORMS = ["lawn_mower", "sensor", "binary_sensor", "device_tracker"]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.DEVICE_TRACKER,
+    Platform.LAWN_MOWER,
+    Platform.SENSOR,
+]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+
+async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> bool:
     """Set up integration from config entry."""
-    hass.data.setdefault(DOMAIN, {})
-    
-    token = entry.data.get("access_token")
-    session = async_get_clientsession(hass)
-    api_client = NavimowApiClient(token, session)
 
-    devices = await api_client.async_get_devices()
-    coordinator = NavimowDataUpdateCoordinator(hass, api_client, entry, devices)
+    @callback
+    def _async_save_tokens(token_data: dict[str, Any]) -> None:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, **token_data})
+
+    api = NavimowApiClient(
+        async_get_clientsession(hass),
+        entry.data[CONF_ACCESS_TOKEN],
+        entry.data.get(CONF_REFRESH_TOKEN),
+        entry.data.get(CONF_EXPIRES_AT, 0),
+        _async_save_tokens,
+    )
+
+    try:
+        devices = await api.async_get_devices()
+    except NavimowAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except NavimowError as err:
+        raise ConfigEntryNotReady(f"Unable to fetch Navimow devices: {err}") from err
+
+    coordinator = NavimowDataUpdateCoordinator(
+        hass, entry, api, [d for d in devices if d.get("id")]
+    )
     await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
 
-    mqtt_info = await api_client.async_get_mqtt_info()
-    if mqtt_info:
-        await coordinator.async_setup_mqtt(mqtt_info)
+    if coordinator.device_ids:
+        mqtt_client = NavimowMqttClient(
+            hass,
+            entry,
+            api,
+            coordinator.device_ids,
+            coordinator.async_handle_mqtt_message,
+        )
+        entry.async_on_unload(mqtt_client.async_stop)
+        entry.async_create_background_task(
+            hass, mqtt_client.async_start(), "navimow_mqtt_start"
+        )
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "api": api_client,
-        "devices": devices
-    }
-
+    # Options (dock position, map rotation) are read live by the entities
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Remove integration."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok
+
+async def _async_entry_updated(hass: HomeAssistant, entry: NavimowConfigEntry) -> None:
+    entry.runtime_data.async_update_listeners()
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> bool:
+    """Unload a config entry."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

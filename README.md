@@ -12,24 +12,25 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
 ### Implemented
 
 - **Lawn Mower Entity:** Full native Home Assistant `lawn_mower` entity
-  - Start/stop mowing
+  - Start/resume mowing
   - Pause operation
   - Return to dock
-  - Real-time state monitoring (mowing, docked, paused, idle, error, returning)
+  - Real-time state monitoring (mowing, docked, paused, returning, error)
 - **Sensors:**
   - Battery level (percentage)
-  - Real-time state updates via MQTT
+  - Error (last error reported by the mower, `none` otherwise)
 
 - **Binary Sensors:**
   - Connectivity status (online/offline)
 
 - **Device Tracker:**
-  - GPS location tracking with real-time position updates ()
+  - Position on the map, updated every ~2 seconds while the mower moves
 
 - **Data Updates:**
   - Polling updates every 30 seconds via REST API
   - Real-time MQTT WebSocket connection for instant state changes
   - Automatic token refresh when access tokens expire
+  - Re-authentication prompt when the session can no longer be refreshed
 
 ### Architecture
 
@@ -37,11 +38,12 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
 - **Data Coordinator:** Centralized data management with automatic refresh handling
 - **MQTT Real-time Updates:** WebSocket-based MQTT for instant device state changes
 - **Token Management:** Automatic refresh token handling with persistent storage
+- **Diagnostics:** Downloadable diagnostics with tokens and GPS position redacted
 
 ## 📋 Requirements
 
 - A Segway Navimow robotic lawn mower with an active account
-- Home Assistant 2024.1 or later
+- Home Assistant 2024.11 or later
 - Active internet connection
 
 ## ⚙️ Installation
@@ -69,24 +71,30 @@ _Note: Until the repository is added to the default HACS store, you must add it 
 Configuration is done completely via the Home Assistant UI (Config Flow).
 
 1. Go to **Settings** → **Devices & Services** → **Integrations**
-2. Click **+ Create Automation** and search for **Navimow**
-3. You'll be prompted to authenticate with your Navimow account
-4. A browser window will open for OAuth authentication
-5. After authentication, the integration will be configured automatically
+2. Click **+ Add Integration** and search for **Navimow**
+3. Enter a name for the account
+4. A browser window will open on the Navimow login page
+5. After logging in, place the pin on the charging dock and set the map rotation (see [Position and map rotation](#position-and-map-rotation))
+
+The login redirects back to `<your Home Assistant URL>/api/navimow/callback`, so the browser must be able to reach Home Assistant at its configured URL (**Settings** → **System** → **Network**).
 
 ## 📱 Available Entities
 
 ### Lawn Mower
 
 - Entity ID: `lawn_mower.{device_name}`
-- States: `docked`, `mowing`, `paused`, `returning`, `idle`, `error`
+- States: `docked`, `mowing`, `paused`, `returning`, `error` (an idle mower is reported as `docked`)
 - Commands: `start_mowing()`, `pause()`, `dock()`
+- Unavailable while the mower is offline
 
 ### Sensor
 
 - Entity ID: `sensor.{device_name}_battery`
 - Value: Battery percentage (0-100%)
 - Unit: %
+
+- Entity ID: `sensor.{device_name}_error`
+- Value: error code reported by the mower, or `none`
 
 ### Binary Sensor
 
@@ -97,14 +105,25 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 ### Device Tracker
 
 - Entity ID: `device_tracker.{device_name}_position`
-- Attributes: `latitude`, `longitude`, `gps_accuracy`
+- Attributes: `latitude`, `longitude`, `local_x`/`local_y` (meters from the dock), `local_heading` (degrees, on the mower map), `distance_from_dock`, `mowing_zone` and `mowing_progress` (%) when reported
+
+#### Position and map rotation
+
+The mower does not report GPS coordinates: through an undocumented MQTT channel (`/realtimeDate/location`) it reports its position in meters from the dock, on its own map. The integration converts it to GPS using two options, asked during setup and editable later from **Settings** → **Devices & Services** → **Navimow** → **Configure**:
+
+- **Dock location:** GPS position of the charging dock (defaults to the Home Assistant home location)
+- **Map rotation:** the mower map axes are not aligned with north. With 0° the map is assumed to point north; positive values turn it clockwise around the dock
+
+To calibrate the rotation, watch the track on the Home Assistant map while the mower works and change the rotation until it matches the lawn. The change applies immediately.
+
+Until the first position arrives, a docked mower is shown at the dock.
 
 ## 🔄 How It Works
 
 1. **OAuth Authentication:** Securely authenticates with Segway servers using OAuth2
 2. **REST Polling:** Fetches device status every 30 seconds
-3. **MQTT Streaming:** Maintains a WebSocket connection for real-time updates
-4. **Token Management:** Automatically refreshes expired tokens
+3. **MQTT Streaming:** Maintains a WebSocket connection for real-time updates, reconnecting with fresh credentials (and increasing delays) when it drops
+4. **Token Management:** Refreshes the token shortly before it expires; if the refresh token is rejected, Home Assistant asks you to log in again
 5. **Entity Creation:** Creates Home Assistant entities for each connected device
 
 ## 🐛 Troubleshooting
@@ -123,7 +142,28 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 ### Authentication errors
 
 - Ensure your Navimow account is still active
-- Try removing the integration and re-adding it
+- If Home Assistant shows a **Reconfigure** / re-authentication notification for Navimow, follow it and log in again
+- If the login page does not return to Home Assistant, check the Home Assistant URL in **Settings** → **System** → **Network**
+
+## 🧪 Development
+
+```bash
+pip install -r requirements_test.txt
+pytest
+```
+
+The Home Assistant test harness does not install on native Windows: use WSL or Linux.
+
+### Live tests
+
+`tests_live/` runs against the real Navimow cloud with your account. Log in once with the same OAuth flow used by the integration (tokens are saved to the git-ignored `.navimow_live/` folder), then run the tests without the Home Assistant pytest plugin, which blocks network access:
+
+```bash
+python scripts/live_login.py          # open the printed URL and log in
+pytest -p no:homeassistant -s tests_live
+```
+
+The tests are read-only. `NAVIMOW_LIVE_COMMANDS=1` also sends a command that does not change what the mower is doing (dock while docked, pause while paused). Real responses are saved, secrets redacted, in `.navimow_live/captured/`. The MQTT credentials endpoint rejects calls less than a minute apart: wait a minute between runs.
 
 ## 🤝 Contributing
 

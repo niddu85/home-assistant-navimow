@@ -9,18 +9,61 @@
         }
       },
       "auth": {
-        "title": "Link Navimow Account",
-        "description": "Per favore, clicca su [questo link]({auth_url}) per effettuare il login con il tuo account Segway Navimow.\n\nUna volta terminato, la finestra si chiuderà da sola o si aggiornerà automaticamente."
+        "title": "Collega account Navimow",
+        "description": "Effettua il login con il tuo account Segway Navimow nella finestra che si apre. Home Assistant proseguirà automaticamente al termine del login."
+      },
+      "reauth_confirm": {
+        "title": "Riautentica Navimow",
+        "description": "La sessione Navimow è scaduta. Effettua di nuovo il login per ripristinare la connessione."
+      },
+      "dock": {
+        "title": "Posizione della base",
+        "description": "Il tosaerba comunica la sua posizione in metri rispetto alla base. Per mostrarla sulla mappa, posiziona il segnaposto sulla base e imposta la rotazione della mappa.\n\nCon rotazione 0° si assume che la mappa del tosaerba sia orientata a nord. Se la traccia sulla mappa risulta ruotata rispetto al prato, correggi la rotazione nelle opzioni dell'integrazione: valori positivi la ruotano in senso orario.",
+        "data": {
+          "dock_location": "Posizione della base",
+          "map_rotation": "Rotazione mappa"
+        },
+        "data_description": {
+          "dock_location": "Posizione GPS della base di ricarica.",
+          "map_rotation": "Rotazione in senso orario, in gradi, per allineare la mappa del tosaerba al nord."
+        }
       }
     },
-    "error": {
-      "invalid_url": "L'URL fornito non è valido.",
-      "invalid_code": "Impossibile estrarre il codice di autorizzazione.",
-      "auth_failed": "Autenticazione fallita: impossibile ottenere il token.",
-      "cannot_connect": "Impossibile connettersi ai server Navimow."
-    },
     "abort": {
-      "already_configured": "Un account con questo nome è già stato configurato."
+      "already_configured": "Questo account Navimow è già configurato.",
+      "auth_failed": "Autenticazione fallita: impossibile ottenere il token.",
+      "cannot_connect": "Impossibile connettersi ai server Navimow.",
+      "no_url": "Impossibile determinare l'URL di Home Assistant per il redirect del login. Configuralo in Impostazioni → Sistema → Rete.",
+      "reauth_successful": "Riautenticazione completata.",
+      "wrong_account": "Hai effettuato il login con un account Navimow diverso da quello configurato."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Errore"
+      }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Posizione"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Posizione del tosaerba sulla mappa",
+        "description": "Correggi la posizione della base e la rotazione della mappa. Valori positivi di rotazione ruotano la traccia in senso orario attorno alla base.",
+        "data": {
+          "dock_location": "Posizione della base",
+          "map_rotation": "Rotazione mappa"
+        },
+        "data_description": {
+          "dock_location": "Posizione GPS della base di ricarica.",
+          "map_rotation": "Rotazione in senso orario, in gradi, per allineare la mappa del tosaerba al nord."
+        }
+      }
     }
   }
 }
