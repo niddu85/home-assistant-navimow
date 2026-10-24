@@ -22,6 +22,8 @@ COMMANDS_ENABLED = os.environ.get("NAVIMOW_LIVE_COMMANDS") == "1"
 MOVE_ENABLED = os.environ.get("NAVIMOW_LIVE_MOVE") == "1"
 MOW_SECONDS = int(os.environ.get("NAVIMOW_LIVE_MOW_SECONDS", "90"))
 RETURN_SECONDS = int(os.environ.get("NAVIMOW_LIVE_RETURN_SECONDS", "120"))
+# Extra topics to explore, e.g. "#" or "/downlink/vehicle/{id}/#" ({id} = device id)
+EXTRA_TOPICS = [t for t in os.environ.get("NAVIMOW_LIVE_EXTRA_TOPICS", "").split(",") if t]
 STATUS_INTERVAL = 30
 MIN_BATTERY = 30
 
@@ -46,7 +48,10 @@ async def _mqtt_listener(
     loop = asyncio.get_running_loop()
     started = time.monotonic()
     connected = asyncio.Event()
-    result = SimpleNamespace(messages=[], suback_codes=[], disconnected=asyncio.Event())
+    result = SimpleNamespace(
+        messages=[], raw_messages=[], suback_codes=[], extra_subacks={},
+        disconnected=asyncio.Event(),
+    )
 
     def on_message(topic: str, payload: dict) -> None:
         elapsed = time.monotonic() - started
@@ -73,7 +78,27 @@ async def _mqtt_listener(
             loop.call_soon_threadsafe(connected.set)
 
     client.on_connect = _on_connect
-    client.on_subscribe = lambda c, u, mid, codes, props: result.suback_codes.extend(codes)
+    extra_mids: dict[int, str] = {}
+
+    def on_subscribe(c, u, mid, codes, props) -> None:
+        if mid in extra_mids:
+            result.extra_subacks[extra_mids[mid]] = [str(code) for code in codes]
+        else:
+            result.suback_codes.extend(codes)
+
+    integration_on_message = client.on_message
+
+    def on_raw_message(c, u, msg) -> None:
+        # Record everything: the integration only accepts JSON objects
+        elapsed = time.monotonic() - started
+        text = msg.payload.decode("utf-8", errors="replace")
+        result.raw_messages.append({"t": round(elapsed, 1), "topic": msg.topic, "raw": text})
+        if not any(msg.topic.endswith(f"/realtimeDate/{ch}") for ch in ("state", "event", "attributes")):
+            print(f"[{elapsed:5.0f}s] MQTT RAW {msg.topic}: {text[:300]}")
+        integration_on_message(c, u, msg)
+
+    client.on_subscribe = on_subscribe
+    client.on_message = on_raw_message
     mqtt_client._client = client
     await asyncio.to_thread(_start_client, client, hostname)
     try:
@@ -86,6 +111,14 @@ async def _mqtt_listener(
             return_when=asyncio.FIRST_COMPLETED,
         )
         assert connected.is_set(), "MQTT connection refused or timed out"
+        for topic in EXTRA_TOPICS:
+            for device_id in device_ids if "{id}" in topic else [None]:
+                full = topic.replace("{id}", device_id) if device_id else topic
+                _, mid = client.subscribe(full)
+                extra_mids[mid] = full
+        await asyncio.sleep(2)
+        if EXTRA_TOPICS:
+            print(f"extra subscriptions: {result.extra_subacks}")
         yield result
     finally:
         await asyncio.to_thread(_close_client, client)
@@ -146,7 +179,7 @@ async def test_mqtt_connect_and_receive(api: NavimowApiClient) -> None:
     print(f"subscription results: {[str(code) for code in mqtt.suback_codes]}")
     assert len(mqtt.suback_codes) == 3 * len(device_ids), "missing SUBACKs"
     assert not any(code.is_failure for code in mqtt.suback_codes), "subscription refused"
-    capture("mqtt_messages", mqtt.messages)
+    capture("mqtt_messages", mqtt.raw_messages)
     print(f"messages received: {len(mqtt.messages)}")
 
 
@@ -217,7 +250,10 @@ async def test_mowing_cycle(api: NavimowApiClient) -> None:
             await asyncio.sleep(STATUS_INTERVAL)
             await poll_rest()
 
-    capture("mowing_cycle", {"rest": rest_timeline, "mqtt": mqtt.messages})
+    capture(
+        "mowing_cycle",
+        {"rest": rest_timeline, "mqtt": mqtt.messages, "mqtt_raw": mqtt.raw_messages},
+    )
 
     states = [entry["status"].get("vehicleState") for entry in rest_timeline]
     mqtt_keys = sorted({key for m in mqtt.messages for key in m["payload"]})
@@ -230,5 +266,7 @@ async def test_mowing_cycle(api: NavimowApiClient) -> None:
     print(f"REST positions: {sum('position' in e['status'] for e in rest_timeline)}")
     print(f"MQTT messages: {len(mqtt.messages)}, payload keys: {mqtt_keys}")
     print(f"MQTT messages with GPS-like keys: {len(gps_messages)}")
+    topics = sorted({m["topic"] for m in mqtt.raw_messages})
+    print(f"MQTT topics seen: {topics}")
 
     assert any(state not in (None, "isDocked") for state in states), "mower never left the dock"
