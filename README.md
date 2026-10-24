@@ -19,6 +19,7 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
 - **Sensors:**
   - Battery level (percentage)
   - Error (last error reported by the mower, `none` otherwise)
+  - Mowing zone and mowing progress (%)
 
 - **Binary Sensors:**
   - Connectivity status (online/offline)
@@ -95,6 +96,14 @@ The login redirects back to `<your Home Assistant URL>/api/navimow/callback`, so
 
 - Entity ID: `sensor.{device_name}_error`
 - Value: error code reported by the mower, or `none`
+
+- Entity ID: `sensor.{device_name}_mowing_zone`
+- Value: internal id of the zone being mowed. The ids do not match the zone names in the app: watch which id appears while the mower mows each zone
+
+- Entity ID: `sensor.{device_name}_mowing_progress`
+- Value: progress of the current mowing route (0-100%)
+
+Zone and progress are reported by the mower while it mows, so they are `unknown` until the first report after a restart.
 
 ### Binary Sensor
 

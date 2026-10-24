@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Mowing zone** and **Mowing progress** sensors ([#5](https://github.com/niddu85/home-assistant-navimow/issues/5)). They show the zone being mowed and the progress of the current mowing route (%), so you can use them in dashboards, history and automations without template sensors. The zone is the mower's internal id, which doesn't match the zone names in the app. The same values remain available as attributes of the position tracker.
+
 ## 0.3.0
 
 A large rework focused on reliability. It fixes entities becoming unavailable after about an hour, fixes the setup flow, and adds the mower position on the map.

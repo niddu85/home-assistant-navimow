@@ -42,6 +42,12 @@
     "sensor": {
       "error": {
         "name": "Error"
+      },
+      "mowing_zone": {
+        "name": "Mowing zone"
+      },
+      "mowing_progress": {
+        "name": "Mowing progress"
       }
     },
     "device_tracker": {

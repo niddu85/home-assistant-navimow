@@ -305,3 +305,26 @@ async def test_location_survives_poll_and_does_not_delay_it(
 
     assert aioclient_mock.call_count > polls
     assert hass.states.get(TRACKER).attributes["local_x"] == 33
+
+
+async def test_mowing_zone_and_progress_sensors(
+    hass: HomeAssistant, aioclient_mock, config_entry, mock_mqtt
+) -> None:
+    _mock_api(aioclient_mock, {**STATUS, "vehicleState": "isRunning"})
+    await _setup(hass, config_entry)
+    zone, progress = "sensor.my_mower_mowing_zone", "sensor.my_mower_mowing_progress"
+    assert hass.states.get(zone).state == STATE_UNKNOWN
+    assert hass.states.get(progress).state == STATE_UNKNOWN
+    assert hass.states.get(progress).attributes["unit_of_measurement"] == "%"
+
+    config_entry.runtime_data.async_handle_mqtt_message(
+        LOCATION_TOPIC, [{"type": 2, "currentMowProgress": 4274, "currentMowBoundary": 316}]
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(zone).state == "316"
+    assert float(hass.states.get(progress).state) == 42.74
+
+    # Pose updates keep the last reported zone and progress
+    config_entry.runtime_data.async_handle_mqtt_message(LOCATION_TOPIC, _pose(1, 2))
+    await hass.async_block_till_done()
+    assert hass.states.get(zone).state == "316"
