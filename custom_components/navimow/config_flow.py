@@ -5,7 +5,6 @@ import logging
 import secrets
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlencode
 
 import voluptuous as vol
 from aiohttp import web
@@ -24,12 +23,11 @@ from .api import (
     NavimowAuthError,
     NavimowError,
     async_exchange_code,
+    build_authorize_url,
     token_data_to_entry_data,
 )
 from .const import (
-    AUTH_BASE_URL,
     CALLBACK_PATH,
-    CLIENT_ID,
     CONF_ACCESS_TOKEN,
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
@@ -175,15 +173,8 @@ class NavimowConfigFlow(ConfigFlow, domain=DOMAIN):
         _async_register_callback_view(self.hass)
         self.hass.data.setdefault(DATA_PENDING_FLOWS, {})[self._state] = self.flow_id
 
-        params = {
-            "channel": "homeassistant",
-            "client_id": CLIENT_ID,
-            "response_type": "code",
-            "redirect_uri": self._redirect_uri,
-            "state": self._state,
-        }
         return self.async_external_step(
-            step_id="auth", url=f"{AUTH_BASE_URL}?{urlencode(params)}"
+            step_id="auth", url=build_authorize_url(self._redirect_uri, self._state)
         )
 
     async def async_step_exchange(

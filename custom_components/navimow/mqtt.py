@@ -20,7 +20,8 @@ _LOGGER = logging.getLogger(__name__)
 
 MQTT_PORT = 443
 MQTT_KEEPALIVE = 60
-RECONNECT_MIN_DELAY = 10
+# The MQTT credentials endpoint rejects calls less than a minute apart
+RECONNECT_MIN_DELAY = 60
 RECONNECT_MAX_DELAY = 300
 TOPIC_CHANNELS = ("state", "event", "attributes")
 

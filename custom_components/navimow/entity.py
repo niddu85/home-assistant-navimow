@@ -36,7 +36,7 @@ class NavimowEntity(CoordinatorEntity[NavimowDataUpdateCoordinator]):
             name=device.get("name"),
             manufacturer="Segway",
             model=device.get("model"),
-            sw_version=device.get("firmware_version"),
+            sw_version=device.get("firmware"),
         )
 
     @property

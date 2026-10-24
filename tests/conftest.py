@@ -20,7 +20,7 @@ STATUS_URL = f"{SMARTHOME_URL}/getVehicleStatus"
 COMMAND_URL = f"{SMARTHOME_URL}/sendCommands"
 MQTT_INFO_URL = f"{API_BASE_URL}/mqtt/userInfo/get/v2"
 
-DEVICE = {"id": "dev1", "name": "My Mower", "model": "i105E", "firmware_version": "1.2.3"}
+DEVICE = {"id": "dev1", "name": "My Mower", "model": "i105E", "firmware": "0064"}
 STATUS = {
     "id": "dev1",
     "vehicleState": "isDocked",

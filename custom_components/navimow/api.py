@@ -7,11 +7,13 @@ import time
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 
 from .const import (
     API_BASE_URL,
+    AUTH_BASE_URL,
     CLIENT_ID,
     CLIENT_SECRET,
     CONF_ACCESS_TOKEN,
@@ -42,6 +44,18 @@ class NavimowConnectionError(NavimowError):
 
 class NavimowAuthError(NavimowError):
     """Credentials were rejected and the user must log in again."""
+
+
+def build_authorize_url(redirect_uri: str, state: str) -> str:
+    """Return the URL of the Navimow login page."""
+    params = {
+        "channel": "homeassistant",
+        "client_id": CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    return f"{AUTH_BASE_URL}?{urlencode(params)}"
 
 
 async def async_request_token(

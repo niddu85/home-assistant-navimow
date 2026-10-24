@@ -143,6 +143,17 @@ pytest
 
 The Home Assistant test harness does not install on native Windows: use WSL or Linux.
 
+### Live tests
+
+`tests_live/` runs against the real Navimow cloud with your account. Log in once with the same OAuth flow used by the integration (tokens are saved to the git-ignored `.navimow_live/` folder), then run the tests without the Home Assistant pytest plugin, which blocks network access:
+
+```bash
+python scripts/live_login.py          # open the printed URL and log in
+pytest -p no:homeassistant -s tests_live
+```
+
+The tests are read-only. `NAVIMOW_LIVE_COMMANDS=1` also sends a command that does not change what the mower is doing (dock while docked, pause while paused). Real responses are saved, secrets redacted, in `.navimow_live/captured/`. The MQTT credentials endpoint rejects calls less than a minute apart: wait a minute between runs.
+
 ## 🤝 Contributing
 
 Contributions are welcome! If you find a bug or have a feature request, please open an issue or submit a pull request.
