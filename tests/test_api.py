@@ -22,7 +22,15 @@ from custom_components.navimow.api import (
 )
 from custom_components.navimow.const import TOKEN_URL
 
-from .conftest import COMMAND_URL, DEVICE, DEVICES_URL, STATUS, STATUS_URL, TOKEN_RESPONSE, ok
+from .conftest import (
+    COMMAND_URL,
+    DEVICE,
+    DEVICES_URL,
+    STATUS,
+    STATUS_URL,
+    TOKEN_RESPONSE,
+    ok,
+)
 
 
 def _client(hass: HomeAssistant, expires_at: float | None = None, callback=None):
@@ -130,4 +138,34 @@ async def test_failed_command_raises(
 ) -> None:
     aioclient_mock.post(COMMAND_URL, json={"code": 0, "desc": "DEVICE_OFFLINE"})
     with pytest.raises(NavimowError, match="DEVICE_OFFLINE"):
+        await _client(hass).async_send_command("dev1", "action.devices.commands.Dock")
+
+
+def _command_response(status: str, error_code: str | None = None) -> dict:
+    """sendCommands response as returned by the real cloud."""
+    return ok(
+        {
+            "commands": [
+                {
+                    "devices": [{"id": "dev1", "cmdNum": "123"}],
+                    "status": status,
+                    "errorCode": error_code,
+                }
+            ]
+        }
+    )
+
+
+async def test_command_accepted(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    aioclient_mock.post(COMMAND_URL, json=_command_response("SUCCESS"))
+    await _client(hass).async_send_command("dev1", "action.devices.commands.Dock")
+
+
+async def test_command_rejected_per_device(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    aioclient_mock.post(COMMAND_URL, json=_command_response("ERROR", "deviceOffline"))
+    with pytest.raises(NavimowError, match="deviceOffline"):
         await _client(hass).async_send_command("dev1", "action.devices.commands.Dock")

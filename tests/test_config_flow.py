@@ -89,13 +89,14 @@ async def test_full_flow(hass: HomeAssistant, hass_client_no_auth, mock_oauth) -
     assert token_request["redirect_uri"] == REDIRECT_URI
 
 
+@pytest.mark.parametrize("state_param", ["", "&state=null"])
 async def test_callback_without_state_single_flow(
-    hass: HomeAssistant, hass_client_no_auth, mock_oauth
+    hass: HomeAssistant, hass_client_no_auth, mock_oauth, state_param
 ) -> None:
-    """The login page might not echo state back."""
+    """The login page might not echo state back, or send the string "null"."""
     result = await _start_user_flow(hass)
     client = await hass_client_no_auth()
-    resp = await client.get("/api/navimow/callback?code=the-code")
+    resp = await client.get(f"/api/navimow/callback?code=the-code{state_param}")
     assert resp.status == 200
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"])

@@ -12,8 +12,14 @@ import pytest
 
 from custom_components.navimow.api import NavimowApiClient
 from custom_components.navimow.const import OFFLINE_STATES
+from custom_components.navimow.coordinator import NavimowDataUpdateCoordinator
+from custom_components.navimow.geo import local_to_gps
 from custom_components.navimow.lawn_mower import RAW_STATE_TO_ACTIVITY
-from custom_components.navimow.mqtt import NavimowMqttClient, _close_client, _start_client
+from custom_components.navimow.mqtt import (
+    NavimowMqttClient,
+    _close_client,
+    _start_client,
+)
 
 from .conftest import capture
 
@@ -26,6 +32,10 @@ RETURN_SECONDS = int(os.environ.get("NAVIMOW_LIVE_RETURN_SECONDS", "120"))
 EXTRA_TOPICS = [t for t in os.environ.get("NAVIMOW_LIVE_EXTRA_TOPICS", "").split(",") if t]
 STATUS_INTERVAL = 30
 MIN_BATTERY = 30
+# Dock position and map rotation used to convert poses (default: relative to 0,0)
+DOCK_LATITUDE = float(os.environ.get("NAVIMOW_LIVE_DOCK_LAT", "0"))
+DOCK_LONGITUDE = float(os.environ.get("NAVIMOW_LIVE_DOCK_LON", "0"))
+MAP_ROTATION = float(os.environ.get("NAVIMOW_LIVE_MAP_ROTATION", "0"))
 
 
 async def _statuses(api: NavimowApiClient) -> dict:
@@ -50,13 +60,34 @@ async def _mqtt_listener(
     connected = asyncio.Event()
     result = SimpleNamespace(
         messages=[], raw_messages=[], suback_codes=[], extra_subacks={},
-        disconnected=asyncio.Event(),
+        gps_track=[], disconnected=asyncio.Event(),
     )
+    # Decode location messages with the integration's coordinator code
+    decoder = SimpleNamespace(
+        device_ids=device_ids, locations={}, async_update_listeners=lambda: None
+    )
+    result.locations = decoder.locations
 
-    def on_message(topic: str, payload: dict) -> None:
+    def on_message(topic: str, payload) -> None:
         elapsed = time.monotonic() - started
         result.messages.append({"t": round(elapsed, 1), "topic": topic, "payload": payload})
-        print(f"[{elapsed:5.0f}s] MQTT {topic.rsplit('/', 1)[-1]}: {payload}")
+        if not topic.endswith("/location"):
+            print(f"[{elapsed:5.0f}s] MQTT {topic.rsplit('/', 1)[-1]}: {payload}")
+            return
+        device_id = topic.split("/")[3]
+        NavimowDataUpdateCoordinator._async_handle_location(decoder, device_id, payload)
+        location = decoder.locations.get(device_id, {})
+        if "x" not in location:
+            return
+        lat, lon = local_to_gps(
+            location["x"], location["y"], DOCK_LATITUDE, DOCK_LONGITUDE, MAP_ROTATION
+        )
+        result.gps_track.append({"t": round(elapsed, 1), "lat": lat, "lon": lon, **location})
+        print(
+            f"[{elapsed:5.0f}s] pose x={location['x']} y={location['y']} "
+            f"-> {lat:.7f}, {lon:.7f} zone={location.get('zone')} "
+            f"progress={location.get('progress')}"
+        )
 
     mqtt_client = NavimowMqttClient(
         SimpleNamespace(loop=loop), None, api, device_ids, on_message
@@ -93,7 +124,8 @@ async def _mqtt_listener(
         elapsed = time.monotonic() - started
         text = msg.payload.decode("utf-8", errors="replace")
         result.raw_messages.append({"t": round(elapsed, 1), "topic": msg.topic, "raw": text})
-        if not any(msg.topic.endswith(f"/realtimeDate/{ch}") for ch in ("state", "event", "attributes")):
+        channels = ("state", "event", "attributes", "location")
+        if not any(msg.topic.endswith(f"/realtimeDate/{ch}") for ch in channels):
             print(f"[{elapsed:5.0f}s] MQTT RAW {msg.topic}: {text[:300]}")
         integration_on_message(c, u, msg)
 
@@ -252,21 +284,26 @@ async def test_mowing_cycle(api: NavimowApiClient) -> None:
 
     capture(
         "mowing_cycle",
-        {"rest": rest_timeline, "mqtt": mqtt.messages, "mqtt_raw": mqtt.raw_messages},
+        {
+            "rest": rest_timeline,
+            "mqtt": mqtt.messages,
+            "mqtt_raw": mqtt.raw_messages,
+            "gps_track": mqtt.gps_track,
+        },
     )
 
     states = [entry["status"].get("vehicleState") for entry in rest_timeline]
-    mqtt_keys = sorted({key for m in mqtt.messages for key in m["payload"]})
-    gps_messages = [
-        m for m in mqtt.messages
-        if any(k in m["payload"] for k in ("position", "lat", "lng", "latitude", "longitude"))
-    ]
+    mqtt_keys = sorted(
+        {key for m in mqtt.messages if isinstance(m["payload"], dict) for key in m["payload"]}
+    )
     print("\n=== summary ===")
     print(f"REST states: {states}")
     print(f"REST positions: {sum('position' in e['status'] for e in rest_timeline)}")
     print(f"MQTT messages: {len(mqtt.messages)}, payload keys: {mqtt_keys}")
-    print(f"MQTT messages with GPS-like keys: {len(gps_messages)}")
+    print(f"positions converted to GPS: {len(mqtt.gps_track)}")
+    print(f"last location: {mqtt.locations}")
     topics = sorted({m["topic"] for m in mqtt.raw_messages})
     print(f"MQTT topics seen: {topics}")
 
     assert any(state not in (None, "isDocked") for state in states), "mower never left the dock"
+    assert mqtt.gps_track, "no position received through the integration code"

@@ -92,6 +92,9 @@ class NavimowCallbackView(HomeAssistantView):
         hass = request.app[KEY_HASS]
         code = request.query.get("code")
         state = request.query.get("state")
+        if state == "null":
+            # Sent by the login page when the authorize URL had no state
+            state = None
         pending = hass.data.get(DATA_PENDING_FLOWS, {})
 
         flow_id = None

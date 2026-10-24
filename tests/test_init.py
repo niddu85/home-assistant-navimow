@@ -13,7 +13,12 @@ from homeassistant.components.lawn_mower import (
     LawnMowerActivity,
 )
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    STATE_OFF,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
@@ -25,9 +30,21 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 
-from custom_components.navimow.const import CONF_ACCESS_TOKEN, CONF_REFRESH_TOKEN, TOKEN_URL
+from custom_components.navimow.const import (
+    CONF_ACCESS_TOKEN,
+    CONF_REFRESH_TOKEN,
+    TOKEN_URL,
+)
 
-from .conftest import COMMAND_URL, DEVICE, DEVICES_URL, STATUS, STATUS_URL, TOKEN_RESPONSE, ok
+from .conftest import (
+    COMMAND_URL,
+    DEVICE,
+    DEVICES_URL,
+    STATUS,
+    STATUS_URL,
+    TOKEN_RESPONSE,
+    ok,
+)
 
 MOWER = "lawn_mower.my_mower"
 BATTERY = "sensor.my_mower_battery"

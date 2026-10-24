@@ -248,8 +248,12 @@ class NavimowApiClient:
     async def async_send_command(
         self, device_id: str, command: str, params: dict | None = None
     ) -> None:
-        """Send a command to a device. Raises NavimowError on failure."""
-        await self._async_request(
+        """Send a command to a device. Raises NavimowError on failure.
+
+        SUCCESS only means the cloud accepted the command: the mower may still
+        ignore it.
+        """
+        data = await self._async_request(
             "POST",
             f"{SMARTHOME_URL}/sendCommands",
             {
@@ -261,6 +265,12 @@ class NavimowApiClient:
                 ]
             },
         )
+        for result in data.get("payload", {}).get("commands", []):
+            if result.get("status") not in (None, "SUCCESS"):
+                raise NavimowError(
+                    f"Command {command} rejected: {result.get('status')} "
+                    f"({result.get('errorCode')})"
+                )
 
     async def async_get_mqtt_info(self) -> dict[str, Any]:
         """Fetch MQTT broker connection info and credentials."""
