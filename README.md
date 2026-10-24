@@ -12,24 +12,25 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
 ### Implemented
 
 - **Lawn Mower Entity:** Full native Home Assistant `lawn_mower` entity
-  - Start/stop mowing
+  - Start/resume mowing
   - Pause operation
   - Return to dock
-  - Real-time state monitoring (mowing, docked, paused, idle, error, returning)
+  - Real-time state monitoring (mowing, docked, paused, returning, error)
 - **Sensors:**
   - Battery level (percentage)
-  - Real-time state updates via MQTT
+  - Error (last error reported by the mower, `none` otherwise)
 
 - **Binary Sensors:**
   - Connectivity status (online/offline)
 
 - **Device Tracker:**
-  - GPS location tracking with real-time position updates ()
+  - GPS location tracking with real-time position updates
 
 - **Data Updates:**
   - Polling updates every 30 seconds via REST API
   - Real-time MQTT WebSocket connection for instant state changes
   - Automatic token refresh when access tokens expire
+  - Re-authentication prompt when the session can no longer be refreshed
 
 ### Architecture
 
@@ -37,11 +38,12 @@ Unofficial Home Assistant custom integration for Segway Navimow robotic lawn mow
 - **Data Coordinator:** Centralized data management with automatic refresh handling
 - **MQTT Real-time Updates:** WebSocket-based MQTT for instant device state changes
 - **Token Management:** Automatic refresh token handling with persistent storage
+- **Diagnostics:** Downloadable diagnostics with tokens and GPS position redacted
 
 ## 📋 Requirements
 
 - A Segway Navimow robotic lawn mower with an active account
-- Home Assistant 2024.1 or later
+- Home Assistant 2024.11 or later
 - Active internet connection
 
 ## ⚙️ Installation
@@ -69,24 +71,30 @@ _Note: Until the repository is added to the default HACS store, you must add it 
 Configuration is done completely via the Home Assistant UI (Config Flow).
 
 1. Go to **Settings** → **Devices & Services** → **Integrations**
-2. Click **+ Create Automation** and search for **Navimow**
-3. You'll be prompted to authenticate with your Navimow account
-4. A browser window will open for OAuth authentication
-5. After authentication, the integration will be configured automatically
+2. Click **+ Add Integration** and search for **Navimow**
+3. Enter a name for the account
+4. A browser window will open on the Navimow login page
+5. After logging in, Home Assistant completes the setup automatically
+
+The login redirects back to `<your Home Assistant URL>/api/navimow/callback`, so the browser must be able to reach Home Assistant at its configured URL (**Settings** → **System** → **Network**).
 
 ## 📱 Available Entities
 
 ### Lawn Mower
 
 - Entity ID: `lawn_mower.{device_name}`
-- States: `docked`, `mowing`, `paused`, `returning`, `idle`, `error`
+- States: `docked`, `mowing`, `paused`, `returning`, `error` (an idle mower is reported as `docked`)
 - Commands: `start_mowing()`, `pause()`, `dock()`
+- Unavailable while the mower is offline
 
 ### Sensor
 
 - Entity ID: `sensor.{device_name}_battery`
 - Value: Battery percentage (0-100%)
 - Unit: %
+
+- Entity ID: `sensor.{device_name}_error`
+- Value: error code reported by the mower, or `none`
 
 ### Binary Sensor
 
@@ -97,14 +105,14 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 ### Device Tracker
 
 - Entity ID: `device_tracker.{device_name}_position`
-- Attributes: `latitude`, `longitude`, `gps_accuracy`
+- Attributes: `latitude`, `longitude`
 
 ## 🔄 How It Works
 
 1. **OAuth Authentication:** Securely authenticates with Segway servers using OAuth2
 2. **REST Polling:** Fetches device status every 30 seconds
-3. **MQTT Streaming:** Maintains a WebSocket connection for real-time updates
-4. **Token Management:** Automatically refreshes expired tokens
+3. **MQTT Streaming:** Maintains a WebSocket connection for real-time updates, reconnecting with fresh credentials (and increasing delays) when it drops
+4. **Token Management:** Refreshes the token shortly before it expires; if the refresh token is rejected, Home Assistant asks you to log in again
 5. **Entity Creation:** Creates Home Assistant entities for each connected device
 
 ## 🐛 Troubleshooting
@@ -123,7 +131,17 @@ Configuration is done completely via the Home Assistant UI (Config Flow).
 ### Authentication errors
 
 - Ensure your Navimow account is still active
-- Try removing the integration and re-adding it
+- If Home Assistant shows a **Reconfigure** / re-authentication notification for Navimow, follow it and log in again
+- If the login page does not return to Home Assistant, check the Home Assistant URL in **Settings** → **System** → **Network**
+
+## 🧪 Development
+
+```bash
+pip install -r requirements_test.txt
+pytest
+```
+
+The Home Assistant test harness does not install on native Windows: use WSL or Linux.
 
 ## 🤝 Contributing
 
