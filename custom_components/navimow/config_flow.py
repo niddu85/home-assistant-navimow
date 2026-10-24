@@ -1,147 +1,254 @@
 """Config flow for Segway Navimow integration."""
-import urllib.parse
+from __future__ import annotations
+
 import logging
-from aiohttp import web
+import secrets
+from collections.abc import Mapping
+from typing import Any
+from urllib.parse import urlencode
+
 import voluptuous as vol
-
-from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.helpers.network import get_url
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.http import KEY_HASS
+from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.util.hass_dict import HassKey
 
-from .const import DOMAIN, CLIENT_ID, CLIENT_SECRET, TOKEN_URL, AUTH_BASE_URL
+from .api import (
+    NavimowApiClient,
+    NavimowAuthError,
+    NavimowError,
+    async_exchange_code,
+    token_data_to_entry_data,
+)
+from .const import (
+    AUTH_BASE_URL,
+    CALLBACK_PATH,
+    CLIENT_ID,
+    CONF_ACCESS_TOKEN,
+    CONF_EXPIRES_AT,
+    CONF_REFRESH_TOKEN,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
+CONF_ACCOUNT_NAME = "account_name"
+
+# OAuth state -> flow_id of the flows waiting for the redirect
+DATA_PENDING_FLOWS: HassKey[dict[str, str]] = HassKey(f"{DOMAIN}_pending_flows")
+DATA_VIEW_REGISTERED: HassKey[bool] = HassKey(f"{DOMAIN}_view_registered")
+
+HTML_PAGE = """<html>
+<head><title>Navimow Authentication</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px; background-color: #121212; color: white;">
+<h2 style="color: {color};">{title}</h2>
+<p>{message}</p>
+</body>
+</html>"""
+
+
+def _html_response(success: bool, message: str) -> web.Response:
+    return web.Response(
+        text=HTML_PAGE.format(
+            color="#4CAF50" if success else "#F44336",
+            title="Authentication successful!" if success else "Authentication failed",
+            message=message,
+        ),
+        content_type="text/html",
+        status=200 if success else 400,
+    )
+
 
 class NavimowCallbackView(HomeAssistantView):
-    """HTTP endpoint in Home Assistant to handle Navimow OAuth redirect."""
-    
-    url = "/api/navimow/callback"
+    """Receives the OAuth redirect and hands the code to the waiting flow."""
+
+    url = CALLBACK_PATH
     name = "api:navimow:callback"
     requires_auth = False
 
-    def __init__(self, hass: HomeAssistant, flow_id: str):
-        """Initialize the view with the config flow ID."""
-        self.hass = hass
-        self.flow_id = flow_id
-
     async def get(self, request: web.Request) -> web.Response:
         """Handle GET request from Navimow OAuth redirect."""
+        hass = request.app[KEY_HASS]
         code = request.query.get("code")
-        
-        if not code:
-            return web.Response(text="Error: 'code' parameter not found in redirect URL.", status=400)
+        state = request.query.get("state")
+        pending = hass.data.get(DATA_PENDING_FLOWS, {})
 
-        await self.hass.config_entries.flow.async_configure(
-            flow_id=self.flow_id,
-            user_input={"code": code}
+        flow_id = None
+        if state:
+            flow_id = pending.pop(state, None)
+        elif len(pending) == 1:
+            # The login page may not echo `state` back: in that case accept the
+            # code only if exactly one flow is waiting for it.
+            _, flow_id = pending.popitem()
+
+        if not code or not flow_id:
+            return _html_response(
+                False, "No matching Navimow setup in progress. Please start it again."
+            )
+
+        try:
+            await hass.config_entries.flow.async_configure(
+                flow_id=flow_id, user_input={"code": code}
+            )
+        except UnknownFlow:
+            return _html_response(
+                False, "The Navimow setup has expired. Please start it again."
+            )
+
+        return _html_response(
+            True,
+            "Home Assistant has received the data. You can close this window and return to the app.",
         )
 
-        html_response = """
-        <html>
-            <head><title>Navimow Authentication</title></head>
-            <body style="font-family: sans-serif; text-align: center; padding: 50px; background-color: #121212; color: white;">
-                <h2 style="color: #4CAF50;">Authentication successful!</h2>
-                <p>Home Assistant has received the data. You can close this window and return to the app.</p>
-            </body>
-        </html>
-        """
-        return web.Response(text=html_response, content_type="text/html")
+
+@callback
+def _async_register_callback_view(hass: HomeAssistant) -> None:
+    """Register the OAuth callback view once per Home Assistant run."""
+    if not hass.data.get(DATA_VIEW_REGISTERED):
+        hass.http.register_view(NavimowCallbackView())
+        hass.data[DATA_VIEW_REGISTERED] = True
 
 
-class NavimowConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class NavimowConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle setup and config flow for Navimow."""
-    
+
     VERSION = 1
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the flow."""
-        self.redirect_uri = None
-        self.account_name = None
+        self._account_name: str | None = None
+        self._redirect_uri: str | None = None
+        self._state: str | None = None
+        self._code: str | None = None
 
-    async def async_step_user(self, user_input=None):
-        """First step: Ask user for account name."""
-        errors = {}
-
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """First step: ask for a name for this account."""
         if user_input is not None:
-            self.account_name = user_input["account_name"]
-
-            await self.async_set_unique_id(self.account_name)
-            self._abort_if_unique_id_configured()
-
+            self._account_name = user_input[CONF_ACCOUNT_NAME]
             return await self.async_step_auth()
-
-        data_schema = vol.Schema({
-            vol.Required("account_name", default="My Navimow"): str
-        })
 
         return self.async_show_form(
             step_id="user",
-            data_schema=data_schema,
-            errors=errors
+            data_schema=vol.Schema(
+                {vol.Required(CONF_ACCOUNT_NAME, default="My Navimow"): str}
+            ),
         )
 
-    async def async_step_auth(self, user_input=None):
-        """Second step: Show OAuth login link and wait for callback."""
-        
-        if user_input is not None and "code" in user_input:
-            return await self.async_step_exchange(user_input["code"])
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Start reauthentication when the stored tokens are rejected."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask the user to log in again."""
+        if user_input is None:
+            return self.async_show_form(step_id="reauth_confirm")
+        return await self.async_step_auth()
+
+    async def async_step_auth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Send the user to the Navimow login page and wait for the redirect."""
+        if user_input is not None:
+            # Called by NavimowCallbackView with the authorization code
+            self._code = user_input["code"]
+            return self.async_external_step_done(next_step_id="exchange")
 
         try:
             ha_url = get_url(self.hass, prefer_external=True)
-        except Exception:
-            ha_url = get_url(self.hass)
+        except NoURLAvailableError:
+            return self.async_abort(reason="no_url")
 
-        self.redirect_uri = f"{ha_url}/api/navimow/callback"
-        
+        self._redirect_uri = f"{ha_url}{CALLBACK_PATH}"
+        self._state = secrets.token_urlsafe(16)
+        _async_register_callback_view(self.hass)
+        self.hass.data.setdefault(DATA_PENDING_FLOWS, {})[self._state] = self.flow_id
+
         params = {
             "channel": "homeassistant",
             "client_id": CLIENT_ID,
             "response_type": "code",
-            "redirect_uri": self.redirect_uri
+            "redirect_uri": self._redirect_uri,
+            "state": self._state,
         }
-        auth_url = f"{AUTH_BASE_URL}?{urllib.parse.urlencode(params)}"
-
-        self.hass.http.register_view(NavimowCallbackView(self.hass, self.flow_id))
-
-        return self.async_show_form(
-            step_id="auth", 
-            description_placeholders={"auth_url": auth_url}
+        return self.async_external_step(
+            step_id="auth", url=f"{AUTH_BASE_URL}?{urlencode(params)}"
         )
 
-    async def async_step_exchange(self, code: str):
-        """Third step: Exchange authorization code for access token."""
+    async def async_step_exchange(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Exchange the authorization code for tokens and create the entry."""
+        assert self._code is not None and self._redirect_uri is not None
         session = async_get_clientsession(self.hass)
-        
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "redirect_uri": self.redirect_uri,
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
         try:
-            async with session.post(TOKEN_URL, data=payload, headers=headers) as response:
-                response.raise_for_status()
-                token_data = await response.json()
-
-                if "access_token" in token_data:
-                    return self.async_create_entry(
-                        title=self.account_name, 
-                        data={
-                            "access_token": token_data["access_token"],
-                            "refresh_token": token_data.get("refresh_token"),
-                            "expires_in": token_data.get("expires_in", 3600),
-                        }
-                    )
-                else:
-                    _LOGGER.error("Error token response: %s", token_data)
-                    return self.async_abort(reason="auth_failed")
-                    
-        except Exception as e:
-            _LOGGER.error("Error during token exchange: %s", e)
+            token_data = await async_exchange_code(
+                session, self._code, self._redirect_uri
+            )
+            entry_data = token_data_to_entry_data(token_data)
+            api = NavimowApiClient(
+                session,
+                entry_data[CONF_ACCESS_TOKEN],
+                entry_data[CONF_REFRESH_TOKEN],
+                entry_data[CONF_EXPIRES_AT],
+                entry_data.update,
+            )
+            devices = await api.async_get_devices()
+        except NavimowAuthError as err:
+            _LOGGER.error("Navimow authentication failed: %s", err)
+            return self.async_abort(reason="auth_failed")
+        except NavimowError as err:
+            _LOGGER.error("Error connecting to Navimow: %s", err)
             return self.async_abort(reason="cannot_connect")
+
+        device_ids = {d["id"] for d in devices if d.get("id")}
+
+        if self.source == SOURCE_REAUTH:
+            reauth_entry = self._get_reauth_entry()
+            known_ids = self._configured_device_ids(reauth_entry.entry_id)
+            if known_ids and device_ids and known_ids.isdisjoint(device_ids):
+                return self.async_abort(reason="wrong_account")
+            return self.async_update_reload_and_abort(
+                reauth_entry, data_updates=entry_data
+            )
+
+        if device_ids & self._configured_device_ids():
+            return self.async_abort(reason="already_configured")
+
+        return self.async_create_entry(title=self._account_name, data=entry_data)
+
+    @callback
+    def _configured_device_ids(self, entry_id: str | None = None) -> set[str]:
+        """Return the Navimow device ids of one entry, or of all entries."""
+        registry = dr.async_get(self.hass)
+        if entry_id:
+            devices = dr.async_entries_for_config_entry(registry, entry_id)
+        else:
+            devices = [
+                device
+                for entry in self._async_current_entries(include_ignore=False)
+                for device in dr.async_entries_for_config_entry(registry, entry.entry_id)
+            ]
+        return {
+            identifier
+            for device in devices
+            for domain, identifier in device.identifiers
+            if domain == DOMAIN
+        }
+
+    @callback
+    def async_remove(self) -> None:
+        """Forget the pending OAuth state when the flow is closed."""
+        if self._state:
+            self.hass.data.get(DATA_PENDING_FLOWS, {}).pop(self._state, None)

@@ -1,32 +1,36 @@
-from homeassistant.components.device_tracker import SourceType
-from homeassistant.components.device_tracker.config_entry import TrackerEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
-from .const import DOMAIN
+"""Device tracker platform for Segway Navimow."""
+from __future__ import annotations
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    devices = hass.data[DOMAIN][entry.entry_id]["devices"]
-    async_add_entities([NavimowTracker(coordinator, d) for d in devices])
+from homeassistant.components.device_tracker import SourceType, TrackerEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-class NavimowTracker(CoordinatorEntity, TrackerEntity):
-    def __init__(self, coordinator, device_data):
-        super().__init__(coordinator)
-        self._id = device_data.get("id")
-        self._attr_name = f"{device_data.get('name')} Position"
-        self._attr_unique_id = f"{self._id}_tracker"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, self._id)})
+from .coordinator import NavimowConfigEntry
+from .entity import NavimowEntity
 
-    @property
-    def latitude(self):
-        pos = self.coordinator.data.get(self._id, {}).get("position")
-        return pos.get("lat") if pos else None
 
-    @property
-    def longitude(self):
-        pos = self.coordinator.data.get(self._id, {}).get("position")
-        return pos.get("lng") if pos else None
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: NavimowConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator = entry.runtime_data
+    async_add_entities(NavimowTracker(coordinator, d) for d in coordinator.devices)
+
+
+class NavimowTracker(NavimowEntity, TrackerEntity):
+    _attr_translation_key = "position"
+    _attr_source_type = SourceType.GPS
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device, "tracker")
 
     @property
-    def source_type(self):
-        return SourceType.GPS
+    def latitude(self) -> float | None:
+        pos = self.status.get("position")
+        return pos.get("lat") if isinstance(pos, dict) else None
+
+    @property
+    def longitude(self) -> float | None:
+        pos = self.status.get("position")
+        return pos.get("lng") if isinstance(pos, dict) else None

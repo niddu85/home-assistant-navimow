@@ -1,131 +1,97 @@
-from homeassistant.components.lawn_mower import LawnMowerEntity, LawnMowerEntityFeature, LawnMowerActivity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
+"""Lawn mower platform for Segway Navimow."""
+from __future__ import annotations
+
 import logging
-from .const import DOMAIN
+from typing import Any
+
+from homeassistant.components.lawn_mower import (
+    LawnMowerActivity,
+    LawnMowerEntity,
+    LawnMowerEntityFeature,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .api import NavimowAuthError, NavimowError
+from .coordinator import NavimowConfigEntry
+from .entity import NavimowEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-RAW_STATE_TO_CANONICAL = {
-    "isDocked": "docked",
-    "isIdel": "idle",
-    "isIdle": "idle",
-    "isMapping": "mowing",
-    "isRunning": "mowing",
-    "isPaused": "paused",
-    "isDocking": "returning",
-    "Error": "error",
-    "error": "error",
-    "isLifted": "error",
-    "inSoftwareUpdate": "paused",
-    "Self-Checking": "idle",
-    "Self-checking": "idle",
-    "Offline": "unknown",
-    "offline": "unknown",
+# Home Assistant has no "idle" activity: idle and self-checking mowers are
+# reported as docked. Offline mowers make the entity unavailable instead.
+RAW_STATE_TO_ACTIVITY = {
+    "isDocked": LawnMowerActivity.DOCKED,
+    "isIdel": LawnMowerActivity.DOCKED,
+    "isIdle": LawnMowerActivity.DOCKED,
+    "Self-Checking": LawnMowerActivity.DOCKED,
+    "Self-checking": LawnMowerActivity.DOCKED,
+    "isMapping": LawnMowerActivity.MOWING,
+    "isRunning": LawnMowerActivity.MOWING,
+    "isPaused": LawnMowerActivity.PAUSED,
+    "inSoftwareUpdate": LawnMowerActivity.PAUSED,
+    "isDocking": LawnMowerActivity.RETURNING,
+    "Error": LawnMowerActivity.ERROR,
+    "error": LawnMowerActivity.ERROR,
+    "isLifted": LawnMowerActivity.ERROR,
 }
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    devices = hass.data[DOMAIN][entry.entry_id]["devices"]
-    async_add_entities([NavimowLawnMower(coordinator, d) for d in devices])
 
-class NavimowLawnMower(CoordinatorEntity, LawnMowerEntity):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: NavimowConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator = entry.runtime_data
+    async_add_entities(NavimowLawnMower(coordinator, d) for d in coordinator.devices)
+
+
+class NavimowLawnMower(NavimowEntity, LawnMowerEntity):
+    _attr_name = None
     _attr_supported_features = (
-        LawnMowerEntityFeature.START_MOWING | LawnMowerEntityFeature.PAUSE | LawnMowerEntityFeature.DOCK
+        LawnMowerEntityFeature.START_MOWING
+        | LawnMowerEntityFeature.PAUSE
+        | LawnMowerEntityFeature.DOCK
     )
 
-    def __init__(self, coordinator, device_data):
-        super().__init__(coordinator)
-        self._id = device_data.get("id")
-        self._attr_name = device_data.get("name")
-        self._attr_unique_id = self._id
-        self._api = coordinator.api
-        
-        # Questo collega l'entità al dispositivo fisico nella UI
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._id)},
-            name=self._attr_name,
-            manufacturer="Segway",
-            model=device_data.get("model"),
-            sw_version=device_data.get("firmware_version"),
-        )
-
     @property
-    def activity(self) -> LawnMowerActivity:
-        """Get current mowing activity state."""
-        device_status = self.coordinator.data.get(self._id, {})
-        
-        raw_state = device_status.get("vehicleState")
-        canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
+    def activity(self) -> LawnMowerActivity | None:
+        """Return the current mowing activity, None if not recognized."""
+        raw_state = self.status.get("vehicleState")
+        if raw_state is None:
+            return None
+        activity = RAW_STATE_TO_ACTIVITY.get(raw_state)
+        if activity is None:
+            _LOGGER.debug("Unknown Navimow vehicleState '%s'", raw_state)
+        return activity
 
-        if canonical == "mowing":
-            return LawnMowerActivity.MOWING
-        if canonical == "returning":
-            return LawnMowerActivity.RETURNING
-        if canonical == "paused":
-            return LawnMowerActivity.PAUSED
-        if canonical == "error":
-            return LawnMowerActivity.ERROR
-        
-        # Default per idle, docked o stati sconosciuti
-        return LawnMowerActivity.DOCKED
-
-    async def _async_send_command(self, command: str, params: dict = None, label: str = "") -> None:
-        """Send command to device with proactive token refresh.
-        
-        Ensures OAuth token is valid before sending the command to avoid
-        CODE_OAUTH_INFO_ILLEGAL errors when token has expired.
-        """
+    async def _async_send_command(
+        self, command: str, params: dict[str, Any] | None = None
+    ) -> None:
         try:
-            await self.coordinator._async_ensure_valid_token()
-        except Exception as err:
-            _LOGGER.error("Failed to refresh token before sending command: %s", err)
-            raise
-        
-        await self._api.async_send_command(self._id, command, params)
-        if label:
-            _LOGGER.info("%s for device %s", label, self._id)
+            await self.coordinator.api.async_send_command(self._device_id, command, params)
+        except NavimowAuthError as err:
+            self.coordinator.config_entry.async_start_reauth(self.hass)
+            raise HomeAssistantError(f"Navimow authentication failed: {err}") from err
+        except NavimowError as err:
+            raise HomeAssistantError(f"Navimow command {command} failed: {err}") from err
         await self.coordinator.async_request_refresh()
 
-    async def async_start_mowing(self):
-        device_status = self.coordinator.data.get(self._id, {})
-        raw_state = device_status.get("vehicleState")
-        canonical = RAW_STATE_TO_CANONICAL.get(raw_state, "unknown")
-        try:
-            if canonical == "paused":
-                await self._async_send_command(
-                    "action.devices.commands.PauseUnpause",
-                    {"on": True},
-                    "Resumed mowing"
-                )
-            else:
-                await self._async_send_command(
-                    "action.devices.commands.StartStop",
-                    {"on": True},
-                    "Started mowing"
-                )
-        except Exception as err:
-            _LOGGER.error("Failed to start mowing for device %s: %s", self._id, err)
-            raise
-    
-    async def async_pause(self):
-        try:
+    async def async_start_mowing(self) -> None:
+        if self.activity == LawnMowerActivity.PAUSED:
             await self._async_send_command(
-                "action.devices.commands.PauseUnpause",
-                {"on": False},
-                "Paused mowing"
+                "action.devices.commands.PauseUnpause", {"on": True}
             )
-        except Exception as err:
-            _LOGGER.error("Failed to pause mowing for device %s: %s", self._id, err)
-            raise
+        else:
+            await self._async_send_command(
+                "action.devices.commands.StartStop", {"on": True}
+            )
 
-    async def async_dock(self):
-        try:
-            await self._async_send_command(
-                "action.devices.commands.Dock",
-                None,
-                "Docked"
-            )
-        except Exception as err:
-            _LOGGER.error("Failed to dock device %s: %s", self._id, err)
-            raise
+    async def async_pause(self) -> None:
+        await self._async_send_command(
+            "action.devices.commands.PauseUnpause", {"on": False}
+        )
+
+    async def async_dock(self) -> None:
+        await self._async_send_command("action.devices.commands.Dock")

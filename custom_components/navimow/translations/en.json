@@ -10,17 +10,32 @@
       },
       "auth": {
         "title": "Link Navimow Account",
-        "description": "Please click [this link]({auth_url}) to log into your Segway Navimow account.\n\nOnce completed, this window will close or update automatically."
+        "description": "Log in to your Segway Navimow account in the window that opens. Home Assistant will continue automatically once the login is complete."
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Navimow",
+        "description": "The Navimow session has expired. Log in again to restore the connection."
       }
     },
-    "error": {
-      "invalid_url": "The provided URL is invalid.",
-      "invalid_code": "Unable to extract the authorization code.",
-      "auth_failed": "Authentication failed: unable to retrieve the token.",
-      "cannot_connect": "Failed to connect to Navimow servers."
-    },
     "abort": {
-      "already_configured": "An account with this name is already configured."
+      "already_configured": "This Navimow account is already configured.",
+      "auth_failed": "Authentication failed: unable to retrieve the token.",
+      "cannot_connect": "Failed to connect to Navimow servers.",
+      "no_url": "Unable to determine the Home Assistant URL for the login redirect. Configure it in Settings → System → Network.",
+      "reauth_successful": "Reauthentication was successful.",
+      "wrong_account": "You logged in with a different Navimow account than the one configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Error"
+      }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Position"
+      }
     }
   }
 }

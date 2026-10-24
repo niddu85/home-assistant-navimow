@@ -1,24 +1,39 @@
-from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
-from .const import DOMAIN
+"""Binary sensor platform for Segway Navimow."""
+from __future__ import annotations
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    devices = hass.data[DOMAIN][entry.entry_id]["devices"]
-    async_add_entities([NavimowConnectivity(coordinator, d) for d in devices])
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-class NavimowConnectivity(CoordinatorEntity, BinarySensorEntity):
+from .coordinator import NavimowConfigEntry
+from .entity import NavimowEntity, is_online
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: NavimowConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator = entry.runtime_data
+    async_add_entities(NavimowConnectivity(coordinator, d) for d in coordinator.devices)
+
+
+class NavimowConnectivity(NavimowEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
-    def __init__(self, coordinator, device_data):
-        super().__init__(coordinator)
-        self._id = device_data.get("id")
-        self._attr_name = f"{device_data.get('name')} Connectivity"
-        self._attr_unique_id = f"{self._id}_connectivity"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, self._id)})
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device, "connectivity")
 
     @property
-    def is_on(self):
-        device_status = self.coordinator.data.get(self._id, {})
-        return device_status.get("online", True) and device_status.get("vehicleState") != "offline"
+    def available(self) -> bool:
+        # Must stay available while the mower is offline: that is its state
+        return self.coordinator.last_update_success and self._device_id in (
+            self.coordinator.data or {}
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return is_online(self.status)
