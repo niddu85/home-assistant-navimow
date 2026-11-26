@@ -28,6 +28,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
     def _async_save_tokens(token_data: dict[str, Any]) -> None:
         hass.config_entries.async_update_entry(entry, data={**entry.data, **token_data})
 
+    if not entry.data.get(CONF_ACCESS_TOKEN):
+        # Without a stored token the entry cannot be loaded. Ask the user to log
+        # in again instead of failing with a KeyError, so the entry (and its
+        # entity ids) can be kept.
+        raise ConfigEntryAuthFailed("No access token stored, please log in again")
+
     api = NavimowApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_ACCESS_TOKEN],

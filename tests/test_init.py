@@ -135,6 +135,21 @@ async def test_rejected_refresh_token_starts_reauth(
     assert [f["context"]["source"] for f in flows] == [SOURCE_REAUTH]
 
 
+async def test_missing_access_token_starts_reauth(
+    hass: HomeAssistant, aioclient_mock, config_entry, mock_mqtt
+) -> None:
+    data = {k: v for k, v in config_entry.data.items() if k != CONF_ACCESS_TOKEN}
+    config_entry = MockConfigEntry(
+        domain=config_entry.domain, title=config_entry.title, data=data
+    )
+    await _setup(hass, config_entry)
+
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert aioclient_mock.call_count == 0
+    flows = hass.config_entries.flow.async_progress()
+    assert [f["context"]["source"] for f in flows] == [SOURCE_REAUTH]
+
+
 @pytest.mark.parametrize(
     ("raw_state", "expected"),
     [
