@@ -1,0 +1,75 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Opsæt Navimow",
+        "description": "Angiv et navn, der identificerer denne Navimow-konto.",
+        "data": {
+          "account_name": "Kontonavn"
+        }
+      },
+      "auth": {
+        "title": "Tilknyt Navimow-konto",
+        "description": "Log ind på din Segway Navimow-konto i det vindue, der åbnes. Home Assistant fortsætter automatisk, når du er logget ind."
+      },
+      "reauth_confirm": {
+        "title": "Log ind på Navimow igen",
+        "description": "Navimow-sessionen er udløbet. Log ind igen for at genoprette forbindelsen."
+      },
+      "dock": {
+        "title": "Ladestationens placering",
+        "description": "Robotplæneklipperen angiver sin position i meter fra ladestationen. For at vise den på kortet skal du sætte nålen på ladestationen og angive kortets rotation.\n\nVed 0° rotation antages det, at klipperens kort vender mod nord. Hvis sporet på kortet er drejet i forhold til plænen, kan du justere rotationen i integrationens indstillinger: positive værdier drejer det med uret.",
+        "data": {
+          "dock_location": "Ladestationens placering",
+          "map_rotation": "Kortrotation"
+        },
+        "data_description": {
+          "dock_location": "Ladestationens GPS-position.",
+          "map_rotation": "Rotation med uret i grader, der skal til for at rette klipperens kort ind mod nord."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Denne Navimow-konto er allerede konfigureret.",
+      "auth_failed": "Godkendelse mislykkedes: kunne ikke hente token.",
+      "cannot_connect": "Kunne ikke forbinde til Navimows servere.",
+      "no_url": "Kan ikke bestemme Home Assistants URL til login-omdirigeringen. Angiv den under Indstillinger → System → Netværk.",
+      "reauth_successful": "Du er logget ind igen.",
+      "wrong_account": "Du loggede ind med en anden Navimow-konto end den, der er konfigureret."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Fejl"
+      },
+      "mowing_zone": {
+        "name": "Klippezone"
+      },
+      "mowing_progress": {
+        "name": "Klippefremskridt"
+      }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Position"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Klipperens position på kortet",
+        "description": "Juster ladestationens placering og kortets rotation. Positive rotationsværdier drejer sporet med uret omkring ladestationen.",
+        "data": {
+          "dock_location": "Ladestationens placering",
+          "map_rotation": "Kortrotation"
+        },
+        "data_description": {
+          "dock_location": "Ladestationens GPS-position.",
+          "map_rotation": "Rotation med uret i grader, der skal til for at rette klipperens kort ind mod nord."
+        }
+      }
+    }
+  }
+}
